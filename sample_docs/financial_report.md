@@ -1,24 +1,26 @@
-# NexaCorp Annual Financial Report & Performance Analysis
+# Annual Financial Performance & Analysis Report FY2025
 
-## Fiscal Year 2025 Financial Highlights
-- **Total Revenue**: $148.6 Million, representing a 54% YoY expansion compared to $96.5 Million in FY 2024.
-- **Annual Recurring Revenue (ARR)**: Reached $132.4 Million at fiscal year-end, driven by a 128% net revenue retention (NRR) across enterprise subscriptions.
-- **Gross Profit**: $114.4 Million (77% gross margin), benefiting from hybrid infrastructure efficiencies and optimized inference costs.
-- **Operating Income (EBITDA)**: $26.8 Million (18% margin), achieving full GAAP profitability ahead of guidance.
-- **Cash & Short-Term Investments**: Ended the year with $84.2 Million in liquid reserves and zero long-term debt obligations.
+## 1. Consolidated Financial Highlights
+- **Total Revenue**: $148.5 Million, an increase of 52% compared to $97.7 Million in FY2024.
+- **Gross Profit**: $118.8 Million (80.0% Gross Margin), compared to $76.2 Million (78.0% Gross Margin) in FY2024.
+- **Operating Expenses**:
+  - Research & Development (R&D): $44.6 Million (focusing on local embedding optimization and agent frameworks)
+  - Sales & Marketing (S&M): $38.2 Million
+  - General & Administrative (G&A): $16.3 Million
+- **Operating Income (EBIT)**: $19.7 Million, representing an operating margin of 13.3%.
+- **Net Income**: $15.8 Million after income tax provision.
+- **Cash and Cash Equivalents**: $62.4 Million with zero long-term debt obligations.
 
-## Revenue Breakdown by Product Line
-1. **Agent Engine Enterprise Platform**: Generated $89.2 Million (60% of total revenue). High demand for sovereign private RAG deployments across banking and defense sectors.
-2. **Developer Cloud & API Services**: Contributed $38.6 Million (26% of total revenue), tracking 110% YoY growth in active token ingestion volume.
-3. **Professional Advisory & Solutions**: Accounted for $20.8 Million (14% of total revenue), supporting enterprise deployment architecture and security audits.
+## 2. Revenue Breakdown by Product Line
+- **Enterprise Agent Platform**: $89.1 Million (60% of total revenue) driven by rapid adoption of on-premise RAG engines.
+- **Cloud Managed Vector Service**: $41.6 Million (28% of total revenue), showing a 74% year-over-year surge.
+- **Professional Services & Custom AI Solutions**: $17.8 Million (12% of total revenue).
 
-## Operating Expenses (OpEx) Analysis
-- **Research & Development (R&D)**: $48.2 Million (32.4% of revenue). Key investments in multi-agent routing algorithms, local embedding fine-tuning, and speculative decoding techniques.
-- **Sales & Marketing (S&M)**: $29.4 Million (19.8% of revenue). Marketing spend focused on high-conversion enterprise ABM initiatives and global developer summits.
-- **General & Administrative (G&A)**: $10.0 Million (6.7% of revenue). Operational overhead minimized through automated procurement and workflow tooling.
+## 3. Key Financial Metrics and KPI Summary
+- **Annual Recurring Revenue (ARR)**: Exited the year at $162.0 Million.
+- **Net Revenue Retention (NRR)**: 128%, highlighting strong land-and-expand dynamics within existing enterprise accounts.
+- **Customer Count**: 640 enterprise clients, up from 410 clients in the previous fiscal year.
+- **Free Cash Flow (FCF)**: Generated positive operating cash flow of $24.1 Million.
 
-## Forward-Looking Guidance for Fiscal Year 2026
-- Projected Total Revenue between $215 Million and $230 Million (45% to 55% YoY growth).
-- Anticipated ARR of $190 Million to $205 Million by Q4 2026.
-- Target Gross Margin expansion to 79%-81% via enhanced GPU resource scheduling and edge inference clustering.
-- Projected Operating Free Cash Flow of $35 Million to $42 Million.
+## 4. Outlook for FY2026
+Management projects full-year FY2026 revenue in the range of $215 Million to $225 Million, representing approximately 45% to 51% YoY top-line growth. Capital expenditures are projected at $12.0 Million primarily dedicated to server infrastructure and low-latency inference hardware clusters.
