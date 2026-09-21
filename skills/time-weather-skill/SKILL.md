@@ -1,30 +1,22 @@
 ---
-name: time-weather-skill
-description: Get the current real-time weather and local time for any specified city or location worldwide without requiring any API key. Use this skill whenever the user asks about weather, temperature, forecasts, conditions, or the local time in a city.
-triggers:
-  - weather in [city]
-  - what is the weather in [city]
-  - temperature in [city]
-  - current time in [city]
-  - what time is it in [city]
-  - forecast for [city]
+name: Time and Weather Skill
+description: Get the current time, timezone, and real-time weather conditions for any city worldwide using the free Open-Meteo public service without requiring API keys.
+Trigger Queries:
+  - What is the weather in Tokyo?
+  - What time is it in London?
+  - Check current temperature and forecast for New York
+  - How is the weather in Paris right now?
+  - Tell me the local time and weather conditions in Sydney
 ---
 
 # Time and Weather Skill
 
-## Description
-Provides real-time weather metrics (temperature, humidity, weather condition description, wind speed) and current local time for any city worldwide using the free Open-Meteo public service.
+## Overview
+This skill provides real-time atmospheric metrics (temperature in Celsius and Fahrenheit, weather condition code, windspeed) and accurate local wall-clock time for any global city. It utilizes the Open-Meteo public API which does not require API keys or credentials.
 
-## SOP & Tool Execution
-When the user asks for the weather or current time in a specific city:
-1. Extract the `city` parameter from the user query (e.g., "Tokyo", "Paris", "New York", "San Francisco").
-2. Invoke `env_tools.get_city_weather_and_time` with the extracted argument:
-```json
-{
-  "tool": "env_tools.get_city_weather_and_time",
-  "arguments": {
-    "city": "Tokyo"
-  }
-}
-```
-3. Synthesize the returned structured data into a helpful response for the user.
+## Standard Operating Procedure (SOP)
+1. **Identify Target City**: Extract the target city or metropolitan area from the user's inquiry.
+2. **Execute Geocoding & Weather Retrieval**:
+   - Run `skills/time-weather-skill/scripts/env_tools.py` passing the city name argument.
+   - Or import `get_weather_and_time` directly in the runtime executor.
+3. **Format Response**: Present the local time, temperature (°C and °F), sky condition, and wind speed clearly to the user.
