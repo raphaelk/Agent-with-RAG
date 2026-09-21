@@ -146,6 +146,7 @@ The App should have 4 pages switchable with the tabs or buttons at the top of th
   - If no PORT is defined in the .env file, use 5000 as the default port.
   - The port can be overridden by passing the --port argument to the app.
 - Use the GEMINI_MODEL from .env file as the default LLM model for the Agent. If the model name is not defined in the .env file, set GEMINI_MODEL=gemma-4-26b-a4b-it as the default LLM model to use. The actual model used should be the one selected in the dropdown menu in the Chat page.
+- Use GEMINI_API_KEY to make the LLM calls using Google genai library
 - All of the backend code should be written in python, the web app should be built using flask.
 - All calls to external resources like Google AI Studio or any external API should be done from the backend python code, not from the frontend.
 - Use local ollama to vectorize the text.
