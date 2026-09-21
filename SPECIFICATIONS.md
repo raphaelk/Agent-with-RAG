@@ -50,12 +50,18 @@ The App should have 4 pages switchable with the tabs or buttons at the top of th
       - Add a drop down box called "Agent" on the right side of the card. The choices are: Custom Agent, Google ADK LlmAgent.
         - If the user selects Custom Agent, use the agent described in the Agent section of this document.
         - If the user selects Google ADK Agent, use the google adk agent
-      - In the next row, add a text box for the user to select the "Max Turns" the default is 3. Do not allow the user to set the number larger than 10.
-      - To the right, add a dropbox to allow the user to select the maximum number of RAG chunks to send to the model. Default value is 5.
-      - Next, add a dropbox called "Skills" to allow the user to select skills to use.
-        - First option in the dropbox should be "Vector Store" as the default option. The Agent will query the skills vector store to select the skills to use in the prompt to the model. Add a text box "Threshold" for the user to enter the threshold to use for the vector store query. The default value is 0.2.
-        - The second option should be "LLM Selected". The Agent will ask the LLM to select the skills to use in the prompt to the model.
-        - The remainder of the selection should be the list of skills in skills/ folder. The Agent will use the skills selected in the prompt to the model.
+      - To the right of the "Agent" box, add a text box for the user to select the "Max Turns" the default is 3. Do not allow the user to set the number larger than 10. Use this as the maximum number of turns for the maximum Agent loop or number of turns.
+      - In the next row, add a dropbox called "Skill Selector" to allow the user to select the skills the agent can use.
+        - First option in the dropbox should be "Vector Store Selects" (default option). The Custom Agent will query the skills vector store to select the skills to use in the prompt to the model.
+        - The second option should be "LLM Selects". The Custom Agent will ask the LLM to select the skills to use in the prompt to the model.
+        - The remainder of the selection should be the list of skills in skills/ folder. The Custom Agent will use the skills selected in the prompt to the model.
+      - Add a text box "Threshold" for the user to enter the threshold when the skill selection is "Vector Store Selects".
+        - Use this number as the threshold when querying the vector store.
+        - The default value is 0.2.
+        - Remove this box if for other selection for "Skill Selector"
+      - In the same row as "Skill Selector", add a dropbox to allow the user to select the maximum number of RAG chunks to send to the model
+        - Default value is 5.
+        - Use this number to limit the number of text chunks to return from the Document Vector Store query.
       - At the bottom of the card, put a text box for the user to enter the chat message.
         - Use a new conversation ID for each question
         - When the user clicks on the "Send" button or presses the Enter key, the agent will process the message.
@@ -67,10 +73,14 @@ The App should have 4 pages switchable with the tabs or buttons at the top of th
         - Anchor "Show Logs" button at the top-right coner of the detail box.
 
     #### Right Card: "Retrieved Context Evidence"
-      - Add a box "Doc Threshold" for the user to set the threshold for the document retrieval. The default value is 0.3.
+      - Add a box "Doc Threshold" for the user to set the threshold for the document retrieval.
+        - The default value is 0.3.
+        - Use this number as the minimum matching score the Document Vector Store should use to determine whether the text chunk should be returned in the query.
       - Display the contents of the information retrieved from the vector store.
         - Include results from the skills vector store and the documents vector store.
         - Group the results by the documents
+        - Display the matching score from the vector store along with the name of the document.
+      - Allow the user to scroll through the data
 
   ### The second page: “Vector DB Ingestion”
     - At the same level as the page title at the right side of the page, put the statistics of the ingestion. Display the number of chunks, documents ingested, and the size of the DB in MByte.
@@ -124,21 +134,29 @@ The App should have 4 pages switchable with the tabs or buttons at the top of th
     - To the left of the “Refresh” button, add a button to allow the user to clear the logs. This will delete all the logs. When the user clicks on this box, open a pop up window asking the user to confirm.
     - Next, display the statistics of the total user prompts logged, model calls, Ollama embeds, Avg call latency.
     #### Top table: "User Conversations (Select a row to inspect associated events)"
-      - Display the list of all the user conversations in the log. Display the timestamp (in local time), conversation ID, User Query, Agent Response, Agent Type, Number of Events (occured during the conversation), etc.
-      - Display at most 7 items and allow the user to scroll through all the items.
+      - Display the list of all the user conversations in the log.
+        - The following columns should be displayed: Timestamp (in local time), Conversation ID, User Query, Agent Response, Agent Type, Number of Events (occured during the conversation), etc.
+        - Only show 5 rows in the table
+        - There should be a scroll bar on the right side to allow the user to scroll through all the items.
       - When the user click on a row, the next table should be populated with the logs associated with the conversation selected.
       - The selected row should be highlighted.
-    #### Bottom table: "Events for Conversation for <Conversation ID>
-    - Display the logs associated with the conversation selected in the table above. The table should have columns showing:
+    #### Bottom table: "Events for Conversation <Conversation ID>
+    - Display the logs associated with the conversation selected in the table above sort by the acending order based on the time. The table should have columns showing:
       - Time and Date (local time)
       - Event Type
       - Invoker
       - Target
       - Short Description
     - When the row is clicked, open a pop up window to show all the detailed logs including the JSON payload in human readable format
+      - The popup window should show the text in the prompt and the response in a human readable format. If the text is JSON, display it in a JSON viewer format.
 
 ## Requirements
 - Import API key and all the contents from the .env file
+- Use the PORT defined in the .env file for the default port of the app.
+  - If no PORT is defined in the .env file, use 5000 as the default port.
+  - The port can be overridden by passing the --port argument to the app.
+- Use the GEMINI_MODEL from .env file as the default LLM model for the Agent. If the model name is not defined in the .env file, set GEMINI_MODEL=gemma-4-26b-a4b-it as the default LLM model to use. The actual model used should be the one selected in the dropdown menu in the Chat page.
+- Use GEMINI_API_KEY to make the LLM calls using Google genai library
 - All of the backend code should be written in python, the web app should be built using flask.
 - All calls to external resources like Google AI Studio or any external API should be done from the backend python code, not from the frontend.
 - Use local ollama to vectorize the text.
@@ -193,7 +211,7 @@ The App should have 4 pages switchable with the tabs or buttons at the top of th
   - Get the list of text chunks from the document vector database. Write the SKILL.md file description to indicate that the tool can be used to get the list of text chunks from the document vector database
   - Get the name, city, country, or job title of the person in the CSV file.
     - Create 20 random samples of the CSV file with name, city, country, or job title for the tool to query
-  - All the python tool should be in the skills/<skill_name>/tools/ folder
+  - All the python tool should be in the skills/<skill_name>/scripts/ folder
 
 ## Sample Documents
 - Create 3 sample documents in the folder called sample_docs/.
@@ -202,14 +220,20 @@ The App should have 4 pages switchable with the tabs or buttons at the top of th
   - The third document should be a sample of financial report for the company
 
 ## Logs
-- Create logs for all the invocations and responses between the following components. The log should include the actual details of the payloads passed to and from the components. Store the logs in the database/ folder in log.json file. The log should be in JSON format. Display in the same conversation event.
-    - agent - full log of the message sent to the agent and the response received from the agent.
-    - skill search - full log of the message sent to the skill search and the response received from the skill search. Include the name of the vectorizer and response from the vectorizer.
+- Create logs for all the calls / invocations and responses between the following components. The log should include the actual details of the payloads passed to and from the components. Store the logs in the database/ folder in log.json file. The log should be in JSON format. Display in the same conversation event.
+    - agent - log the complete messages including actual payload:
+      - Sent to the agent
+      - sent/calls from the agent to: tools, ollama, vector store, MCP, and LLM.
+      - All the responses received from the calls and the LLM
+    - skill search - full log of the message sent to the skill search vector store and the response received from the skill search.
+      - Log the responses. Include the full text of all the text chunks received and the score of each chunk.
+      - Include the name of the vectorizer and response from the vectorizer.
     - document search - full log of the message sent to the document search and the response received from the document search.
-    - tool - full log of tool message passed to and received from the tools including the actual API payload or parameters in the function call. Do not redact or replace any part of the payload and response.
-    - ollama vector - log the first 50 characters of the text chunk sent for embedding. Include the name of the vectorizer and response from the vectorizer. Do not include the vectors.
-    - LLM - prompts sent to and response received from the model include the FULL payload. Do not log the API call for model acces. Only log the model invocation and response with the FULL PAYLOAD.
-    - In the log, include the time of the call, the type of the call, the invoker, the recipient, and all the raw payload passed in the message.
+      - Log the responses. Include the full text of all the text chunks received and the score of each chunk.
+      - Include the name of the vectorizer and response from the vectorizer.
+    - tool - full log of all the calls the tools make. If there is an API call, include the actual API payload or parameters in the function call. Do not redact or replace any part of the payload and response.
+    - LLM - prompts sent to and response received from the model include the FULL payload. Log the model invocation and response. Include the FULL PAYLOAD.
+    - In all of the log, include the time of the call, the type of the call, the invoker, the recipient, and all the raw payload passed in the message.
     - Do not combine the logs of from the request and response into the same log entry when displaying on the screen. Each invocation/response should be a separate entry in the log.
   - Redact API keys with “****” if any is present.
 

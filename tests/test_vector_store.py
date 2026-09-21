@@ -1,45 +1,26 @@
-"""
-Tests for Vector Store and Cosine Similarity.
-"""
+"""Unit tests for ChromaDB Vector Store operations and deduplication."""
 import pytest
-from pathlib import Path
-from services.vector_store import cosine_similarity, chunk_text, VectorStore
-import config
+from services.vector_store import get_vector_store
 
-def test_cosine_similarity():
-    vec1 = [1.0, 0.0, 0.0]
-    vec2 = [1.0, 0.0, 0.0]
-    vec3 = [0.0, 1.0, 0.0]
-
-    assert pytest.approx(cosine_similarity(vec1, vec2), 0.001) == 1.0
-    assert pytest.approx(cosine_similarity(vec1, vec3), 0.001) == 0.0
-
-def test_chunk_text():
-    sample = "A" * 1200
-    chunks = chunk_text(sample, chunk_size=500, overlap=100)
+def test_chunking_logic():
+    store = get_vector_store()
+    text = "A" * 2500
+    chunks = store.chunk_text(text, chunk_size=1000, chunk_overlap=200)
     assert len(chunks) == 3
-    assert len(chunks[0]) == 500
+    assert len(chunks[0]) == 1000
 
-def test_vector_store_deduplication(tmp_path):
-    test_db_file = tmp_path / "test_vectors.json"
-    store = VectorStore(test_db_file)
+def test_document_ingestion_and_deduplication():
+    store = get_vector_store()
+    doc_name = "test_doc_dedup.txt"
+    content = "Agentic RAG combines active tool reasoning with vector retrieval from private stores."
 
-    meta = {"document_name": "test.txt", "source": "test"}
-    added_first = store.add_chunk("This is a unique chunk of information.", meta)
-    added_duplicate = store.add_chunk("This is a unique chunk of information.", meta)
+    # First ingestion
+    res1 = store.add_document(doc_name=doc_name, content=content)
+    assert res1["chunks_added"] >= 1
 
-    assert added_first is True
-    assert added_duplicate is False
+    # Ingest same doc content again - duplicate chunks should not be re-added
+    res2 = store.add_document(doc_name=doc_name, content=content)
+    assert res2["chunks_added"] == 0
 
-    stats = store.get_stats()
-    assert stats["total_chunks"] == 1
-    assert stats["total_documents"] == 1
-
-def test_vector_store_reset(tmp_path):
-    test_db_file = tmp_path / "test_vectors.json"
-    store = VectorStore(test_db_file)
-    store.add_chunk("Chunk 1", {"document_name": "doc1"})
-    assert store.get_stats()["total_chunks"] == 1
-
-    store.reset()
-    assert store.get_stats()["total_chunks"] == 0
+    # Cleanup
+    store.delete_document(doc_name)

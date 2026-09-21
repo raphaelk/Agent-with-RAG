@@ -1,22 +1,32 @@
 ---
-name: Person Information Skill
-description: Look up personal records, including person name, city and country where they live, or job title.
-Trigger Queries:
-  - Who lives in Tokyo according to the registry?
-  - What is the job title of Alex Morgan?
-  - Find all employees located in Germany
-  - Look up the Chief Technology Officer in the database
-  - Search for staff members in Singapore
+name: person-information-skill
+description: Search and lookup personal directory records including employee name, city, country, or job title from the company registry CSV file. Use this skill whenever the user asks about people, personnel, employees, job titles, or someone's location.
+triggers:
+  - who is [person]
+  - where does [person] live
+  - what is [person]'s job title
+  - find employees in [city]
+  - list staff in [country]
+  - who works as [job title]
+  - lookup person [name]
 ---
 
 # Person Information Skill
 
-## Overview
-This skill queries the local flat-file personnel database (`skills/person-information-skill/data/registry.csv`) containing 20 verified organizational records. It matches queries against employee names, residing cities, countries, and professional job titles.
+## Description
+Provides lookup and search capabilities over the personnel database `registry.csv`. Enables searching records by name, city, country, or job title with exact or partial matching.
 
-## Standard Operating Procedure (SOP)
-1. **Identify Query Criteria**: Extract target entity name, designated location (city/country), or target job title from the inquiry.
-2. **Execute Registry Lookup**:
-   - Query `data/registry.csv` by filtering rows where query keywords match the fields `name`, `city`, `country`, or `job_title`.
-   - Use `skills/person-information-skill/scripts/person_search.py` or the internal python registry reader.
-3. **Format Response**: Present matching candidates with their full name, city, country, and official role.
+## SOP & Tool Execution
+When the user asks about an employee or personnel record:
+1. Determine the search `keyword` and the optional `field` (choices: `name`, `city`, `country`, `job_title`, or search all fields if not specified).
+2. Invoke `person_search.query_person_registry`:
+```json
+{
+  "tool": "person_search.query_person_registry",
+  "arguments": {
+    "keyword": "Lucas Dubois",
+    "field": "name"
+  }
+}
+```
+3. Format the returned records clearly showing Name, Job Title, City, and Country.

@@ -1,128 +1,150 @@
-"""
-Ollama Service Integration.
-Manages local Ollama process lifecycle, model pulling, embedding generation,
-and catalog status tracking.
-"""
+"""Ollama embedding and process lifecycle service."""
+import os
+import signal
 import subprocess
 import time
 import requests
-import json
-from typing import List, Dict, Any, Optional
-from config import OLLAMA_BASE_URL, DEFAULT_EMBEDDING_MODEL, SUPPORTED_EMBEDDING_MODELS
-from services.log_service import audit_logger
+from typing import Dict, Any, List, Optional
+import config
+from services.log_service import get_log_service
+
+# Catalogue of well-known Ollama embedding models with specifications
+KNOWN_EMBEDDING_MODELS = [
+    {
+        "name": "bge-m3",
+        "tag": "bge-m3:latest",
+        "dimensions": 1024,
+        "context_window": 8192,
+        "size": "1.2 GB",
+        "description": "Multi-lingual, dense & multi-functional state-of-the-art embedding model.",
+    },
+    {
+        "name": "bge-large",
+        "tag": "bge-large:latest",
+        "dimensions": 1024,
+        "context_window": 512,
+        "size": "670 MB",
+        "description": "High performance dense English sentence and document embedding model.",
+    },
+    {
+        "name": "nomic-embed-text",
+        "tag": "nomic-embed-text:latest",
+        "dimensions": 768,
+        "context_window": 8192,
+        "size": "274 MB",
+        "description": "High-performance embedding model with large 8k context window support.",
+    },
+    {
+        "name": "all-minilm",
+        "tag": "all-minilm:latest",
+        "dimensions": 384,
+        "context_window": 512,
+        "size": "45 MB",
+        "description": "Ultra-compact, ultra-fast embedding model ideal for rapid local processing.",
+    },
+    {
+        "name": "mxbai-embed-large",
+        "tag": "mxbai-embed-large:latest",
+        "dimensions": 1024,
+        "context_window": 512,
+        "size": "670 MB",
+        "description": "Mixedbread AI state-of-the-art text representation model.",
+    },
+    {
+        "name": "snowflake-arctic-embed",
+        "tag": "snowflake-arctic-embed:latest",
+        "dimensions": 1024,
+        "context_window": 512,
+        "size": "669 MB",
+        "description": "Optimized enterprise retrieval model developed by Snowflake.",
+    },
+]
 
 class OllamaService:
-    def __init__(self, base_url: str = OLLAMA_BASE_URL):
-        self.base_url = base_url.rstrip("/")
-        self.current_model = DEFAULT_EMBEDDING_MODEL
+    def __init__(self, base_url: Optional[str] = None):
+        self.base_url = base_url or config.OLLAMA_BASE_URL
+        self.active_model = config.DEFAULT_EMBEDDER_MODEL
         self.started_by_app = False
-        self.process: Optional[subprocess.Popen] = None
+        self._process: Optional[subprocess.Popen] = None
+        self.logger = get_log_service()
 
     def is_running(self) -> bool:
-        """Check if Ollama server responds to HTTP ping."""
+        """Check if Ollama server is responding."""
         try:
-            res = requests.get(f"{self.base_url}/api/tags", timeout=2)
-            return res.status_code == 200
+            resp = requests.get(f"{self.base_url}/api/tags", timeout=2)
+            return resp.status_code == 200
         except Exception:
             return False
 
-    def ensure_service_started(self) -> bool:
-        """
-        Check whether ollama is currently running.
-        If not, start the background service and record started_by_app = True.
-        """
+    def ensure_running(self) -> bool:
+        """Verify Ollama is running; launch it if not already active."""
         if self.is_running():
             self.started_by_app = False
+            # Select best installed model as active
+            installed = self.get_installed_model_names()
+            if self.active_model not in installed and installed:
+                for cand in ["bge-m3", "nomic-embed-text", "all-minilm", "bge-large"]:
+                    if any(cand in name for name in installed):
+                        self.active_model = cand
+                        break
+                else:
+                    self.active_model = installed[0].split(":")[0]
             return True
 
-        # Try to launch ollama serve
+        # Launch ollama serve in background
         try:
-            self.process = subprocess.Popen(
+            self._process = subprocess.Popen(
                 ["ollama", "serve"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                start_new_session=True
+                start_new_session=True,
             )
-            # Wait for startup
-            for _ in range(15):
+            # Wait up to 10 seconds for it to bind
+            for _ in range(20):
                 time.sleep(0.5)
                 if self.is_running():
                     self.started_by_app = True
-                    audit_logger.log_event(
-                        event_type="Ollama Lifecycle",
-                        invoker="System",
-                        target="Ollama",
-                        payload={"action": "start_service"},
-                        response={"status": "running", "started_by_app": True},
-                        description="Started local Ollama background service"
-                    )
                     return True
-        except Exception as e:
-            audit_logger.log_event(
-                event_type="Ollama Error",
-                invoker="System",
-                target="Ollama",
-                payload={"action": "start_service"},
-                response={"error": str(e)},
-                description=f"Failed to start Ollama daemon: {e}",
-                status="error"
-            )
-
-        return self.is_running()
-
-    def shutdown_if_started_by_app(self) -> bool:
-        """
-        Terminate Ollama service ONLY if the app started it.
-        If it was already running, do nothing.
-        """
-        if not self.started_by_app:
+            return False
+        except Exception:
             return False
 
-        try:
-            if self.process:
-                self.process.terminate()
-                self.process.wait(timeout=3)
-                self.process = None
-            else:
-                subprocess.run(["pkill", "-f", "ollama serve"], check=False)
-            self.started_by_app = False
-            audit_logger.log_event(
-                event_type="Ollama Lifecycle",
-                invoker="System",
-                target="Ollama",
-                payload={"action": "shutdown_service"},
-                response={"status": "stopped"},
-                description="Gracefully stopped Ollama service (started by app)"
-            )
-            return True
-        except Exception as e:
-            print(f"[Ollama Shutdown Error] {e}")
-            return False
+    def shutdown(self):
+        """Shutdown Ollama ONLY if this app instance started it."""
+        if self.started_by_app and self._process:
+            try:
+                os.killpg(os.getpgid(self._process.pid), signal.SIGTERM)
+                self._process.wait(timeout=5)
+            except Exception:
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
+            finally:
+                self._process = None
+                self.started_by_app = False
 
-    def get_installed_models(self) -> List[str]:
-        """Fetch list of models locally present in Ollama."""
+    def get_installed_model_names(self) -> List[str]:
+        """Fetch list of models locally available in Ollama."""
         try:
-            res = requests.get(f"{self.base_url}/api/tags", timeout=3)
-            if res.status_code == 200:
-                data = res.json()
-                return [m.get("name") for m in data.get("models", [])]
-        except Exception as e:
-            print(f"[Ollama Tags Error] {e}")
+            resp = requests.get(f"{self.base_url}/api/tags", timeout=3)
+            if resp.status_code == 200:
+                models = resp.json().get("models", [])
+                return [m.get("name", "") for m in models if m.get("name")]
+        except Exception:
+            pass
         return []
 
-    def get_embedding_catalog(self) -> List[Dict[str, Any]]:
-        """
-        List supported embedding models with dimensions, context window,
-        size, brief description, and status (Installed, Active, Available to Pull).
-        """
-        installed = self.get_installed_models()
-        catalog = []
-
-        for model_meta in SUPPORTED_EMBEDDING_MODELS:
-            name = model_meta["name"]
-            is_installed = any(name in inst or inst in name for inst in installed)
-            is_active = (name == self.current_model or self.current_model.startswith(name.split(":")[0]))
-
+    def list_available_models(self) -> List[Dict[str, Any]]:
+        """Return catalogue of embedding models with dimension, context, size, and status."""
+        installed = self.get_installed_model_names()
+        models = []
+        for item in KNOWN_EMBEDDING_MODELS:
+            is_installed = any(
+                item["name"] in inst or item["tag"] in inst for inst in installed
+            )
+            is_active = (self.active_model == item["name"] or self.active_model in item["name"])
+            
             if is_active:
                 status = "Active"
             elif is_installed:
@@ -130,133 +152,112 @@ class OllamaService:
             else:
                 status = "Available to Pull"
 
-            catalog.append({
-                **model_meta,
+            models.append({
+                "name": item["name"],
+                "tag": item["tag"],
+                "dimensions": item["dimensions"],
+                "context_window": item["context_window"],
+                "size": item["size"],
+                "description": item["description"],
                 "status": status,
                 "is_active": is_active,
-                "is_installed": is_installed
+                "is_installed": is_installed,
             })
-
-        return catalog
+        return models
 
     def pull_model(self, model_name: str) -> bool:
-        """Download / pull model in Ollama if not present."""
-        start_time = time.time()
+        """Instruct Ollama to download/pull an embedding model."""
         try:
-            res = requests.post(
+            resp = requests.post(
                 f"{self.base_url}/api/pull",
                 json={"name": model_name, "stream": False},
-                timeout=180
+                timeout=180,
             )
-            latency = (time.time() - start_time) * 1000
-            success = (res.status_code == 200)
-
-            audit_logger.log_event(
-                event_type="Ollama Pull",
-                invoker="Agent Orchestrator",
-                target="Ollama",
-                payload={"model": model_name},
-                response=res.json() if success else {"error": res.text},
-                description=f"Pull Ollama model: {model_name}",
-                latency_ms=latency,
-                status="success" if success else "error"
-            )
-            return success
-        except Exception as e:
-            latency = (time.time() - start_time) * 1000
-            audit_logger.log_event(
-                event_type="Ollama Pull Error",
-                invoker="Agent Orchestrator",
-                target="Ollama",
-                payload={"model": model_name},
-                response={"error": str(e)},
-                description=f"Error pulling model {model_name}: {e}",
-                latency_ms=latency,
-                status="error"
-            )
+            return resp.status_code == 200
+        except Exception:
             return False
 
-    def generate_embedding(self, text: str, model_name: Optional[str] = None, conversation_id: Optional[str] = None, invoker: str = "vector database") -> List[float]:
+    def get_embedding(self, text: str, conversation_id: str = "system") -> List[float]:
+        """Generate vector embedding for text and log per specification:
+        Log first 50 chars of chunk, vectorizer name, and response excluding vector array.
         """
-        Generate dense vector embedding for input text.
-        Logs interactions between invoker ('skill search' or 'document search') and 'ollama vector'.
-        """
-        target_model = model_name or self.current_model
         start_time = time.time()
-
-        payload = {"model": target_model, "vectorizer": target_model, "prompt": text}
-        first_50_chars = text[:50]
-        audit_logger.log_call(
-            event_type="ollama vector",
-            call_type="invocation",
-            invoker=invoker,
-            recipient="ollama vector",
-            payload={"vectorizer": target_model, "text_chunk_first_50": first_50_chars, "total_characters": len(text)},
-            description=f"Log first 50 characters sent for embedding to vectorizer {target_model}: '{first_50_chars}'",
-            conversation_id=conversation_id
-        )
-
+        snippet = text[:50]
+        
         try:
-            res = requests.post(f"{self.base_url}/api/embeddings", json=payload, timeout=30)
-            latency = (time.time() - start_time) * 1000
-
-            if res.status_code == 200:
-                data = res.json()
-                embedding = data.get("embedding", [])
-                audit_logger.log_call(
-                    event_type="ollama vector",
-                    call_type="response",
-                    invoker="ollama vector",
-                    recipient=invoker,
-                    payload={"status": "success", "vectorizer": target_model, "response": {"status": "success", "dimensions": len(embedding), "model": target_model}},
-                    description=f"Log response from vectorizer {target_model} ({len(embedding)} dimensions, vectors omitted)",
-                    conversation_id=conversation_id,
-                    latency_ms=latency
-                )
-                return embedding
-
-            # Fallback endpoint /api/embed
-            res2 = requests.post(f"{self.base_url}/api/embed", json={"model": target_model, "input": text}, timeout=30)
-            if res2.status_code == 200:
-                data2 = res2.json()
-                embeddings = data2.get("embeddings", [])
-                embedding = embeddings[0] if embeddings else []
-                latency = (time.time() - start_time) * 1000
-                audit_logger.log_call(
-                    event_type="ollama vector",
-                    call_type="response",
-                    invoker="ollama vector",
-                    recipient=invoker,
-                    payload={"status": "success", "vectorizer": target_model, "response": {"status": "success", "dimensions": len(embedding), "model": target_model}},
-                    description=f"Log response from vectorizer {target_model} ({len(embedding)} dimensions, vectors omitted)",
-                    conversation_id=conversation_id,
-                    latency_ms=latency
-                )
-                return embedding
-
-            raise RuntimeError(f"Ollama embedding failed with code {res.status_code}: {res.text}")
-
-        except Exception as e:
-            latency = (time.time() - start_time) * 1000
-            audit_logger.log_call(
-                event_type="ollama vector",
-                call_type="response",
-                invoker="ollama vector",
-                recipient=invoker,
-                payload={"status": "error", "error": str(e)},
-                description=f"Embedding error: {e}",
-                conversation_id=conversation_id,
-                latency_ms=latency,
-                status="error"
+            resp = requests.post(
+                f"{self.base_url}/api/embeddings",
+                json={"model": self.active_model, "prompt": text},
+                timeout=30,
             )
-            # Offline pseudo-embedding fallback (deterministic hashing vector)
-            import hashlib
-            import numpy as np
-            h = hashlib.sha256(text.encode("utf-8")).digest()
-            seed = int.from_bytes(h[:4], "big")
-            rng = np.random.default_rng(seed)
-            vec = rng.standard_normal(384).tolist()
-            return vec
+            elapsed_ms = (time.time() - start_time) * 1000
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                vector = data.get("embedding", [])
+                
+                # Log per specification: log first 50 chars, vectorizer name, exclude raw vector float array
+                self.logger.log_event(
+                    conversation_id=conversation_id,
+                    event_type="ollama vector",
+                    invoker="OllamaService",
+                    target=f"Ollama ({self.active_model})",
+                    short_description=f"Generated embedding for: '{snippet}'...",
+                    payload={
+                        "text_snippet_50chars": snippet,
+                        "vectorizer": self.active_model,
+                        "vector_dimensions": len(vector),
+                        "status": "success",
+                    },
+                    elapsed_ms=elapsed_ms,
+                )
+                return vector
+            else:
+                self.logger.log_event(
+                    conversation_id=conversation_id,
+                    event_type="ollama vector",
+                    invoker="OllamaService",
+                    target=f"Ollama ({self.active_model})",
+                    short_description=f"Embedding failed: HTTP {resp.status_code}",
+                    payload={
+                        "text_snippet_50chars": snippet,
+                        "vectorizer": self.active_model,
+                        "error": resp.text,
+                        "status_code": resp.status_code,
+                    },
+                    elapsed_ms=elapsed_ms,
+                    is_error=True,
+                )
+                raise RuntimeError(f"Ollama embedding failed with HTTP {resp.status_code}")
+        except Exception as e:
+            elapsed_ms = (time.time() - start_time) * 1000
+            self.logger.log_event(
+                conversation_id=conversation_id,
+                event_type="ollama vector",
+                invoker="OllamaService",
+                target=f"Ollama ({self.active_model})",
+                short_description=f"Ollama connection error: {str(e)}",
+                payload={"text_snippet_50chars": snippet, "error": str(e)},
+                elapsed_ms=elapsed_ms,
+                is_error=True,
+            )
+            raise
 
-# Global singleton
-ollama_service = OllamaService()
+    def set_active_model(self, model_name: str) -> bool:
+        """Switch active embedding model, pulling if not installed."""
+        installed = self.get_installed_model_names()
+        if not any(model_name in inst for inst in installed):
+            success = self.pull_model(model_name)
+            if not success:
+                return False
+        self.active_model = model_name
+        return True
+
+# Singleton instance
+_OLLAMA_SERVICE: Optional[OllamaService] = None
+
+def get_ollama_service() -> OllamaService:
+    global _OLLAMA_SERVICE
+    if _OLLAMA_SERVICE is None:
+        _OLLAMA_SERVICE = OllamaService()
+    return _OLLAMA_SERVICE

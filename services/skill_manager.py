@@ -1,394 +1,287 @@
-"""
-Skill Manager Service.
-Scans skills/ directory, parses SKILL.md files, vectors skill metadata,
-and dispatches execution to skill scripts and SOP workflows.
-"""
+"""Skill manager scanning, parsing SKILL.md files, and dynamically executing procedural tools."""
 import importlib.util
-import json
 import os
 import re
+import sys
+import time
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-import yaml
-
-from config import SKILLS_DIR, MIN_SKILL_SCORE
-from services.vector_store import skill_vector_store, doc_vector_store
-from services.ollama_service import ollama_service
-from services.log_service import audit_logger
-
-def parse_skill_markdown(skill_path: Path) -> Dict[str, Any]:
-    """
-    Parse SKILL.md file with YAML frontmatter and markdown body.
-    """
-    skill_file = skill_path / "SKILL.md"
-    if not skill_file.exists():
-        return {}
-
-    raw_text = skill_file.read_text(encoding="utf-8")
-    frontmatter = {}
-    body = raw_text
-
-    match = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)$", raw_text, re.DOTALL)
-    if match:
-        fm_text, body = match.groups()
-        try:
-            frontmatter = yaml.safe_load(fm_text) or {}
-        except Exception as e:
-            print(f"Error parsing YAML frontmatter in {skill_file}: {e}")
-
-    # Fallback extraction if frontmatter missing
-    name = frontmatter.get("name") or skill_path.name
-    description = frontmatter.get("description", "")
-    trigger_queries = frontmatter.get("Trigger Queries") or frontmatter.get("trigger_queries", [])
-
-    return {
-        "folder_name": skill_path.name,
-        "path": str(skill_path),
-        "name": name,
-        "description": description,
-        "trigger_queries": trigger_queries,
-        "full_text": raw_text,
-        "body": body
-    }
+from typing import Dict, Any, List, Optional
+import config
+from services.vector_store import get_vector_store
+from services.log_service import get_log_service
 
 class SkillManager:
-    def __init__(self, skills_dir: Path = SKILLS_DIR):
-        self.skills_dir = Path(skills_dir)
+    def __init__(self, skills_dir: Optional[Path] = None):
+        self.skills_dir = skills_dir or config.SKILLS_DIR
+        self.vector_store = get_vector_store()
+        self.logger = get_log_service()
 
-    def scan_and_load_skills(self) -> Dict[str, Any]:
-        """
-        Scan the skills/ folder and load new skills that are not in the skill database.
-        Skills already in the database should not be re-loaded.
-        """
-        if not self.skills_dir.exists():
-            return {"loaded_skills": [], "skipped_skills": [], "total_skills": 0}
+    def parse_skill_md(self, skill_md_path: Path) -> Dict[str, Any]:
+        """Parse YAML frontmatter and content from SKILL.md."""
+        content = skill_md_path.read_text(encoding="utf-8")
+        
+        # Parse frontmatter
+        name = skill_md_path.parent.name
+        description = ""
+        triggers = []
+        
+        fm_match = re.search(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
+        if fm_match:
+            fm_text = fm_match.group(1)
+            name_m = re.search(r"^name:\s*(.+)$", fm_text, re.MULTILINE)
+            if name_m:
+                name = name_m.group(1).strip()
+            
+            desc_m = re.search(r"^description:\s*(.+?)(?=\n[a-zA-Z0-9_-]+:|\Z)", fm_text, re.DOTALL | re.MULTILINE)
+            if desc_m:
+                description = " ".join(desc_m.group(1).split()).strip()
 
-        existing_data = skill_vector_store._load()
-        existing_skill_folders = {
-            c.get("metadata", {}).get("folder_name")
-            for c in existing_data.get("chunks", [])
+            triggers_m = re.search(r"triggers:\s*\n((?:\s*-\s*.+\n?)+)", fm_text)
+            if triggers_m:
+                for line in triggers_m.group(1).splitlines():
+                    clean_line = re.sub(r"^\s*-\s*", "", line).strip()
+                    if clean_line:
+                        triggers.append(clean_line)
+
+        return {
+            "name": name,
+            "folder": skill_md_path.parent.name,
+            "description": description or f"Procedural skill for {name}",
+            "triggers": triggers,
+            "full_content": content,
+            "file_path": str(skill_md_path),
         }
 
-        newly_loaded = []
-        skipped = []
+    def scan_and_sync_skills(self, force_all: bool = False) -> Dict[str, Any]:
+        """Scan skills/ folder and load new skills not currently in skill vector database."""
+        scanned = 0
+        added = 0
+        skipped = 0
+        loaded_skills: List[str] = []
+
+        if not self.skills_dir.exists():
+            return {"scanned": 0, "added": 0, "skipped": 0, "skills": []}
+
+        for item in self.skills_dir.iterdir():
+            if not item.is_dir():
+                continue
+            skill_md = item / "SKILL.md"
+            if not skill_md.exists():
+                continue
+
+            scanned += 1
+            skill_info = self.parse_skill_md(skill_md)
+            skill_name = skill_info["name"]
+
+            # Check if skill exists
+            if not force_all and self.vector_store.skill_exists(skill_name):
+                skipped += 1
+                loaded_skills.append(skill_name)
+                continue
+
+            # Add to vector store
+            try:
+                self.vector_store.add_skill(
+                    skill_name=skill_name,
+                    description=skill_info["description"],
+                    full_content=skill_info["full_content"],
+                    metadata={
+                        "folder": skill_info["folder"],
+                        "triggers": ", ".join(skill_info["triggers"]),
+                        "file_path": skill_info["file_path"],
+                    }
+                )
+                added += 1
+                loaded_skills.append(skill_name)
+            except Exception as e:
+                print(f"[SkillManager] Failed to embed skill {skill_name}: {e}")
+
+        return {
+            "scanned": scanned,
+            "added": added,
+            "skipped": skipped,
+            "skills": loaded_skills,
+        }
+
+    def list_available_skills(self) -> List[Dict[str, Any]]:
+        """Return list of all skills found in the skills directory."""
+        skills = []
+        if not self.skills_dir.exists():
+            return []
 
         for item in sorted(self.skills_dir.iterdir()):
             if not item.is_dir():
                 continue
-            skill_folder_name = item.name
-
-            parsed = parse_skill_markdown(item)
-            if not parsed:
-                continue
-
-            existing_chunk = next((c for c in existing_data.get("chunks", []) if c.get("id") == f"skill-{skill_folder_name}"), None)
-            if (existing_chunk 
-                and existing_chunk.get("model") == ollama_service.current_model 
-                and len(existing_chunk.get("vector", [])) in [384, 768, 1024]
-                and existing_chunk.get("text") == parsed.get("full_text")):
-                skipped.append(skill_folder_name)
-                continue
-
-            # If existing but needs re-embedding due to model or content change, remove prior chunk
-            if existing_chunk:
-                existing_data["chunks"] = [c for c in existing_data["chunks"] if c.get("id") != f"skill-{skill_folder_name}"]
-
-            # Embed name, description, and trigger queries per SPECIFICATION.md
-            triggers_str = " ".join(parsed.get("trigger_queries", []))
-            embed_text = f"{parsed['name']}. {parsed['description']}. Trigger Queries: {triggers_str}" if triggers_str else f"{parsed['name']}. {parsed['description']}"
-
-            vector = ollama_service.generate_embedding(embed_text)
-
-            # Store the vectors and complete text of the SKILL.md file as one record
-            chunk_record = {
-                "id": f"skill-{skill_folder_name}",
-                "content_hash": skill_folder_name,
-                "text": parsed["full_text"],
-                "vector": vector,
-                "model": ollama_service.current_model,
-                "metadata": {
-                    "folder_name": skill_folder_name,
-                    "name": parsed["name"],
-                    "description": parsed["description"],
-                    "trigger_queries": parsed["trigger_queries"],
-                    "path": parsed["path"],
-                    "embed_text": embed_text
-                }
-            }
-
-            existing_data["chunks"].append(chunk_record)
-            existing_data["documents"][skill_folder_name] = {
-                "chunks_count": 1,
-                "total_characters": len(parsed["full_text"]),
-                "source": "skill_definition"
-            }
-            newly_loaded.append(skill_folder_name)
-
-        skill_vector_store._save(existing_data)
-
-        audit_logger.log_event(
-            event_type="Skill DB Update",
-            invoker="System",
-            target="SkillManager",
-            payload={"scanned_folder": str(self.skills_dir)},
-            response={"newly_loaded": newly_loaded, "skipped": skipped},
-            description=f"Loaded {len(newly_loaded)} new skills into skill database"
-        )
-
-        return {
-            "loaded_skills": newly_loaded,
-            "skipped_skills": skipped,
-            "total_skills": len(existing_data.get("chunks", []))
-        }
-
-    def get_all_skills(self) -> List[Dict[str, Any]]:
-        """Return parsed metadata for all skills in skills/ directory."""
-        skills = []
-        if not self.skills_dir.exists():
-            return skills
-        for item in sorted(self.skills_dir.iterdir()):
-            if item.is_dir():
-                parsed = parse_skill_markdown(item)
-                if parsed:
-                    skills.append(parsed)
+            skill_md = item / "SKILL.md"
+            if skill_md.exists():
+                info = self.parse_skill_md(skill_md)
+                skills.append({
+                    "name": info["name"],
+                    "folder": info["folder"],
+                    "description": info["description"],
+                    "triggers": info["triggers"],
+                })
         return skills
 
-    def get_skill_by_folder(self, folder_name: str) -> Optional[Dict[str, Any]]:
-        """Retrieve single skill by folder name."""
-        skill_path = self.skills_dir / folder_name
-        if skill_path.exists() and skill_path.is_dir():
-            parsed = parse_skill_markdown(skill_path)
-            if parsed:
-                return {
-                    "folder_name": folder_name,
-                    "name": parsed["name"],
-                    "description": parsed["description"],
-                    "score": 1.0,
-                    "full_text": parsed["full_text"],
-                    "path": parsed["path"]
-                }
-        return None
-
-    def match_skills(self, user_query: str, min_score: float = MIN_SKILL_SCORE, conversation_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Query the skill vector database.
-        Returns skills with similarity score > min_score (default from UI or 0.5).
-        """
-        results = skill_vector_store.query_similar(user_query, top_k=5, min_score=min_score, conversation_id=conversation_id, invoker="skill search")
-        matched = []
-        for r in results:
-            meta = r.get("metadata", {})
-            matched.append({
-                "folder_name": meta.get("folder_name"),
-                "name": meta.get("name"),
-                "description": meta.get("description"),
-                "score": r.get("score"),
-                "full_text": r.get("text"),
-                "path": meta.get("path")
-            })
-        return matched
-
-    def get_skill_tool_signature(self, skill_info: Dict[str, Any]) -> str:
-        """
-        Dynamically determine procedural tool signature available for this skill.
-        Minimizes skill-specific code in the orchestrator per SPECIFICATION.md.
-        """
-        folder = skill_info.get("folder_name", "").lower()
-        if "weather" in folder or "time" in folder:
-            return "env_tools.get_weather_and_time(city: str)"
-        elif "person" in folder or "registry" in folder:
-            return "person_search.query_person_registry(keyword: str, field: str = None)"
-        elif "stock" in folder:
-            return "stock_search.analyze_stock_query(query: str)"
-        elif "document" in folder or "retriever" in folder:
-            return "document_search_tool.search_documents(query: str, top_k: int)"
-        return f"{skill_info.get('folder_name')}.execute(arguments: dict)"
-
-    def is_skill_tool_match(self, skill_info: Dict[str, Any], tool_to_execute: str) -> bool:
-        """
-        Check if the tool requested by LLM matches this skill.
-        """
-        folder_name = skill_info.get("folder_name", "").lower()
-        skill_name = skill_info.get("name", "").lower()
-        tool_lower = (tool_to_execute or "").lower().strip()
-        if not tool_lower:
-            return False
-        skill_kw = folder_name.replace("-skill", "").split("-")
-        return (
-            tool_lower in folder_name or
-            folder_name in tool_lower or
-            tool_lower in skill_name or
-            skill_name in tool_lower or
-            any(kw in tool_lower for kw in skill_kw) or
-            ("env_tools" in tool_lower and ("weather" in folder_name or "time" in folder_name)) or
-            ("person_search" in tool_lower and "person" in folder_name) or
-            ("stock_search" in tool_lower and "stock" in folder_name) or
-            tool_lower in ["execute_tool", "true"]
-        )
-
-    def execute_skill(
+    def execute_tool(
         self,
-        skill_info: Dict[str, Any],
-        user_query: str,
-        conversation_id: Optional[str] = None,
-        arguments: Optional[Dict[str, Any]] = None
+        tool_name: str,
+        arguments: Dict[str, Any],
+        conversation_id: str = "system",
+        invoker: str = "Custom Agent",
     ) -> Dict[str, Any]:
-        """
-        Dispatch execution from skill to procedural tool.
-        Logs interactions between 'skill', 'tool', and 'external API call'.
-        """
-        folder_name = skill_info.get("folder_name", "")
-        skill_name = skill_info.get("name", "")
-        score = skill_info.get("score", 0.0)
-
-        result_data = None
-        evidence_text = ""
-
-        if "weather" in folder_name.lower() or "time" in folder_name.lower():
-            try:
-                script_path = self.skills_dir / folder_name / "scripts" / "env_tools.py"
-                if script_path.exists():
-                    spec = importlib.util.spec_from_file_location("env_tools", str(script_path))
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-                    # Extract city from structured arguments or fallback query
-                    if arguments and any(k in arguments for k in ["city", "city_name", "location"]):
-                        city = str(arguments.get("city") or arguments.get("city_name") or arguments.get("location")).strip()
-                    else:
-                        stop_words = {"what", "is", "the", "weather", "in", "time", "at", "for", "check", "tell", "me", "how", "right", "now", "currently", "today", "forecast", "like", "please", "conditions"}
-                        words = [w.strip("?,.!\"'") for w in user_query.split() if w.lower().strip("?,.!\"'") not in stop_words]
-                        city = " ".join(words).strip() or "Tokyo"
-
-                    # Log invocation from skill to tool
-                    audit_logger.log_call(
-                        event_type="tool",
-                        call_type="invocation",
-                        invoker="skill",
-                        recipient="tool",
-                        payload={"tool": "env_tools.py", "function": "get_weather_and_time", "city": city},
-                        description=f"Tool message passed to env_tools.py for city: {city}",
-                        conversation_id=conversation_id
-                    )
-
-                    # Log external API call invocation from tool
-                    audit_logger.log_call(
-                        event_type="external API call",
-                        call_type="invocation",
-                        invoker="tool",
-                        recipient="external API call",
-                        payload={"api": "Open-Meteo", "city": city, "geocoding_url": "https://geocoding-api.open-meteo.com/v1/search"},
-                        description=f"Full payload passed to Open-Meteo API for {city}",
-                        conversation_id=conversation_id
-                    )
-
-                    result_data = mod.get_weather_and_time(city)
-
-                    # Log external API call response
-                    audit_logger.log_call(
-                        event_type="external API call",
-                        call_type="response",
-                        invoker="external API call",
-                        recipient="tool",
-                        payload=result_data,
-                        description=f"Full response received from Open-Meteo API for {city}",
-                        conversation_id=conversation_id
-                    )
-
-                    evidence_text = f"Weather in {result_data.get('city', city)}: {result_data.get('condition')}, Temp: {result_data.get('temperature_celsius')}°C / {result_data.get('temperature_fahrenheit')}°F, Time: {result_data.get('local_time')}"
-            except Exception as e:
-                result_data = {"error": str(e)}
-                evidence_text = f"Skill execution error: {e}"
-
-        elif "person" in folder_name.lower() or "registry" in folder_name.lower():
-            try:
-                script_path = self.skills_dir / folder_name / "scripts" / "person_search.py"
-                if script_path.exists():
-                    spec = importlib.util.spec_from_file_location("person_search", str(script_path))
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-                    if arguments and any(k in arguments for k in ["keyword", "name", "query", "field"]):
-                        kw = str(arguments.get("keyword") or arguments.get("name") or arguments.get("query") or "").strip()
-                        field = arguments.get("field")
-                    else:
-                        search_words = [w for w in user_query.split() if w.lower() not in ["who", "where", "is", "the", "find", "all", "what", "job", "title", "of", "person", "in", "lives"]]
-                        kw = " ".join(search_words).strip()
-                        field = None
-
-                    audit_logger.log_call(
-                        event_type="tool",
-                        call_type="invocation",
-                        invoker="skill",
-                        recipient="tool",
-                        payload={"tool": "person_search.py", "function": "query_person_registry", "keyword": kw, "field": field},
-                        description=f"Tool message passed to person_search.py for keyword: '{kw}' (field: {field})",
-                        conversation_id=conversation_id
-                    )
-
-                    matches = mod.query_person_registry(kw, field=field)
-                    result_data = {"matches": matches, "query_keyword": kw, "field": field}
-                    if matches:
-                        evidence_text = f"Found {len(matches)} personnel records: " + "; ".join([f"{p['name']} ({p.get('job_title', '')}, {p.get('city', '')}, {p.get('country', '')})" for p in matches[:5]])
-                    else:
-                        evidence_text = f"No matching registry records found for query keyword '{kw}'."
-            except Exception as e:
-                result_data = {"error": str(e)}
-                evidence_text = f"Skill execution error: {e}"
-
-        elif "stock" in folder_name.lower():
-            try:
-                script_path = self.skills_dir / folder_name / "scripts" / "stock_search.py"
-                if script_path.exists():
-                    spec = importlib.util.spec_from_file_location("stock_search", str(script_path))
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-
-                    stock_q = user_query
-                    if arguments and any(k in arguments for k in ["query", "mode"]):
-                        stock_q = str(arguments.get("query") or arguments.get("mode") or user_query)
-
-                    audit_logger.log_call(
-                        event_type="tool",
-                        call_type="invocation",
-                        invoker="skill",
-                        recipient="tool",
-                        payload={"tool": "stock_search.py", "function": "analyze_stock_query", "query": stock_q},
-                        description=f"Tool message passed to stock_search.py for: '{stock_q}'",
-                        conversation_id=conversation_id
-                    )
-
-                    if arguments and "mode" in arguments and arguments.get("mode"):
-                        result_data = mod.get_stocks_by_performance(mode=str(arguments["mode"]), limit=arguments.get("limit", 5))
-                    else:
-                        result_data = mod.analyze_stock_query(stock_q)
-
-                    stocks = result_data.get("stocks", [])
-                    evidence_text = f"{result_data.get('category')}: " + ", ".join([f"{s['ticker']} ({s['change_pct']:+.2f}%, ${s['price']})" for s in stocks])
-            except Exception as e:
-                result_data = {"error": str(e)}
-                evidence_text = f"Skill execution error: {e}"
-
-        else:
-            result_data = {"info": "Skill matched based on SOP triggers."}
-            evidence_text = skill_info.get("description", "")
-
-        # Log completion from tool back to skill (Response)
-        audit_logger.log_call(
+        """Dynamically find, import, and execute procedural tool function with full logging."""
+        start_time = time.time()
+        
+        # Log tool invocation request
+        self.logger.log_event(
+            conversation_id=conversation_id,
             event_type="tool",
-            call_type="response",
-            invoker="tool",
-            recipient="skill",
-            payload=result_data,
-            description=f"Tool response received from {skill_name}",
-            conversation_id=conversation_id
+            invoker=invoker,
+            target=f"Tool: {tool_name}",
+            short_description=f"Tool invocation: {tool_name}",
+            payload={"tool": tool_name, "arguments": arguments},
         )
 
-        return {
-            "skill_name": skill_name,
-            "folder_name": folder_name,
-            "score": score,
-            "result_data": result_data,
-            "evidence_text": evidence_text
-        }
+        try:
+            # Parse module and function names
+            # Handles 'person_search.query_person_registry' or 'env_tools.get_city_weather_and_time'
+            parts = tool_name.split(".")
+            if len(parts) >= 2:
+                module_str = parts[-2]
+                func_str = parts[-1]
+            else:
+                module_str = parts[0]
+                func_str = parts[0]
 
-# Global singleton
-skill_manager = SkillManager()
+            # Search for script in all skill folders under scripts/
+            target_py_path: Optional[Path] = None
+            for skill_folder in self.skills_dir.iterdir():
+                if not skill_folder.is_dir():
+                    continue
+                cand = skill_folder / "scripts" / f"{module_str}.py"
+                if cand.exists():
+                    target_py_path = cand
+                    break
+
+            if not target_py_path:
+                raise ImportError(f"Could not locate module '{module_str}.py' in skills directory.")
+
+            # Dynamically import module
+            spec = importlib.util.spec_from_file_location(f"dynamic_{module_str}", str(target_py_path))
+            if not spec or not spec.loader:
+                raise ImportError(f"Unable to load spec for {target_py_path}")
+            
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[f"dynamic_{module_str}"] = mod
+            spec.loader.exec_module(mod)
+
+            # Locate function
+            func = getattr(mod, func_str, None)
+            if not func or not callable(func):
+                # Try fallback names or default function in module
+                for cand_name in [func_str, "run", "execute", "query"]:
+                    cand_func = getattr(mod, cand_name, None)
+                    if cand_func and callable(cand_func):
+                        func = cand_func
+                        break
+
+            if not func:
+                raise AttributeError(f"Function '{func_str}' not found in {target_py_path}")
+
+            # Call function
+            result = func(**arguments)
+            elapsed_ms = (time.time() - start_time) * 1000
+
+            # Log tool response with full unredacted payload
+            self.logger.log_event(
+                conversation_id=conversation_id,
+                event_type="tool",
+                invoker=f"Tool: {tool_name}",
+                target=invoker,
+                short_description=f"Tool {tool_name} returned result",
+                payload={"result": result, "status": "success"},
+                elapsed_ms=elapsed_ms,
+            )
+
+            return {
+                "tool": tool_name,
+                "result": result,
+                "elapsed_ms": elapsed_ms,
+                "status": "success",
+            }
+
+        except Exception as e:
+            elapsed_ms = (time.time() - start_time) * 1000
+            err_payload = {"error": str(e), "tool": tool_name, "arguments": arguments}
+            self.logger.log_event(
+                conversation_id=conversation_id,
+                event_type="tool",
+                invoker=f"Tool: {tool_name}",
+                target=invoker,
+                short_description=f"Tool execution failed: {str(e)}",
+                payload=err_payload,
+                elapsed_ms=elapsed_ms,
+                is_error=True,
+            )
+            return {
+                "tool": tool_name,
+                "error": str(e),
+                "elapsed_ms": elapsed_ms,
+                "status": "error",
+            }
+
+    def get_tool_function(self, tool_name: str) -> Callable:
+        """Resolve and return callable Python function for a tool name."""
+        parts = tool_name.split(".")
+        if len(parts) >= 2:
+            module_str = parts[-2]
+            func_str = parts[-1]
+        else:
+            module_str = parts[0]
+            func_str = parts[0]
+
+        target_py_path: Optional[Path] = None
+        for skill_folder in self.skills_dir.iterdir():
+            if not skill_folder.is_dir():
+                continue
+            cand = skill_folder / "scripts" / f"{module_str}.py"
+            if cand.exists():
+                target_py_path = cand
+                break
+
+        if not target_py_path:
+            raise ImportError(f"Could not locate module '{module_str}.py' in skills directory.")
+
+        spec = importlib.util.spec_from_file_location(f"dynamic_{module_str}", str(target_py_path))
+        if not spec or not spec.loader:
+            raise ImportError(f"Unable to load spec for {target_py_path}")
+
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[f"dynamic_{module_str}"] = mod
+        spec.loader.exec_module(mod)
+
+        func = getattr(mod, func_str, None)
+        if not func or not callable(func):
+            for cand_name in [func_str, "run", "execute", "query"]:
+                cand_func = getattr(mod, cand_name, None)
+                if cand_func and callable(cand_func):
+                    func = cand_func
+                    break
+
+        if not func:
+            raise AttributeError(f"Function '{func_str}' not found in {target_py_path}")
+
+        return func
+
+# Singleton instance
+_SKILL_MANAGER: Optional[SkillManager] = None
+
+def get_skill_manager() -> SkillManager:
+    global _SKILL_MANAGER
+    if _SKILL_MANAGER is None:
+        _SKILL_MANAGER = SkillManager()
+    return _SKILL_MANAGER
+
+def get_tool_function(tool_name: str):
+    return get_skill_manager().get_tool_function(tool_name)

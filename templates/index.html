@@ -1,609 +1,716 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Agent with RAG Platform</title>
-  <link rel="icon" type="image/gif" href="/static/images/tab-icon.gif">
+  <title>Agent With RAG Console</title>
+  <link rel="icon" type="image/gif" href="/static/images/tab-icon.gif" onerror="this.href='/static/images/ai-brain-ani-32.gif'">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/style.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
-
-<body>
-
-  <!-- Top Header Navigation -->
+<body class="dark-theme">
+  <!-- Top Application Bar -->
   <header class="app-header">
-    <div class="header-container">
-      <div class="brand-section">
-        <img src="/static/images/app-icon.gif" class="app-brand-icon" alt="App Icon" onerror="this.style.display='none'">
-        <h1 class="brand-title">Agent With RAG</h1>
+    <div class="header-left">
+      <img id="appIcon" src="/static/images/app-icon.gif" alt="App Icon" class="app-icon" onerror="this.style.display='none'">
+      <div class="app-title-group">
+        <h1 class="app-title">Agent With RAG</h1>
+        <span class="app-badge">Enterprise Console</span>
       </div>
+    </div>
 
-      <!-- 4 Switchable Page Tabs with Icons -->
-      <nav class="nav-tabs" role="tablist">
-        <button id="tab-btn-chat" class="tab-btn active" onclick="switchTab('chat')">💬 Chat &amp; Knowledge
-          Synthesis</button>
-        <button id="tab-btn-ingest" class="tab-btn" onclick="switchTab('ingest')">📥 Vector DB Ingestion</button>
-        <button id="tab-btn-telemetry" class="tab-btn" onclick="switchTab('telemetry')">📊 Telemetry</button>
-        <button id="tab-btn-audit" class="tab-btn" onclick="switchTab('audit')">📜 Audit Log &amp; Event</button>
-      </nav>
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs">
+      <button class="nav-tab active" data-target="page-chat">
+        <span class="tab-icon">💬</span>
+        <span class="tab-label">Chat & Knowledge Synthesis</span>
+      </button>
+      <button class="nav-tab" data-target="page-ingest">
+        <span class="tab-icon">📥</span>
+        <span class="tab-label">Vector DB Ingestion</span>
+      </button>
+      <button class="nav-tab" data-target="page-telemetry">
+        <span class="tab-icon">📊</span>
+        <span class="tab-label">Telemetry</span>
+      </button>
+      <button class="nav-tab" data-target="page-audit">
+        <span class="tab-icon">📜</span>
+        <span class="tab-label">Audit Log & Event</span>
+      </button>
+    </nav>
 
-      <!-- Right Header Actions -->
-      <div class="header-right">
-        <!-- Agent Health Status Box -->
-        <div class="agent-status-box" id="agent-status-box" title="Backend Agent & Supporting Services Status">
-          <div class="status-dot" id="status-indicator"></div>
-          <span class="status-label">🩺 Agent:</span>
-          <span class="status-value" id="status-agent-text">Checking...</span>
+    <!-- Header Actions & Health Status -->
+    <div class="header-right">
+      <div class="status-box" id="globalStatusBox" title="Click to view detailed health">
+        <span class="status-dot online" id="statusDot"></span>
+        <span class="status-text" id="statusSummary">Agent: Online</span>
+        <div class="status-tooltip" id="statusTooltip">
+          <div class="tooltip-item"><span>Agent:</span> <strong id="tooltipAgent">Healthy</strong></div>
+          <div class="tooltip-item"><span>Ollama:</span> <strong id="tooltipOllama">Running</strong></div>
+          <div class="tooltip-item"><span>Model:</span> <strong id="tooltipEmbedder">bge-m3</strong></div>
+          <div class="tooltip-item"><span>Vector DB:</span> <strong id="tooltipVector">Connected</strong></div>
+          <div class="tooltip-item"><span>LLM Provider:</span> <strong id="tooltipLlm">Configured</strong></div>
         </div>
-
-        <!-- Light Red Shutdown Button -->
-        <button id="btn-open-shutdown" class="btn-shutdown" onclick="openShutdownModal()">🛑 Shutdown</button>
       </div>
+      <button id="btnShutdown" class="btn-shutdown" title="Terminate application and services">
+        <span class="icon">🛑</span> Shutdown
+      </button>
     </div>
   </header>
 
-  <!-- Main Viewport -->
-  <main class="main-viewport">
+  <!-- Main Multi-Page Container -->
+  <main class="app-content">
 
-    <!-- PAGE 1: Chat & Knowledge Synthesis -->
-    <section id="page-chat" class="tab-page active">
-      <div class="page-top-bar">
-        <h2 class="page-title">💬 Chat &amp; Knowledge Synthesis</h2>
-
-        <!-- Top Right Controls: Max Tokens, Temperature, Model Choice, Custom Endpoint -->
-        <div class="top-bar-controls">
-          <div class="control-item">
-            <label for="chat-max-tokens">🔤 Max Tokens:</label>
-            <input type="number" id="chat-max-tokens" class="control-input" value="2048" min="1" max="8192"
-              oninput="clampMaxTokens(this)">
+    <!-- ================================================================= -->
+    <!-- PAGE 1: Chat & Knowledge Synthesis                               -->
+    <!-- ================================================================= -->
+    <section id="page-chat" class="page-view active">
+      <!-- Page Sub-Header Controls -->
+      <div class="page-subheader">
+        <div class="page-title-area">
+          <h2 class="page-heading"><span class="heading-icon">💬</span> Chat & Knowledge Synthesis</h2>
+        </div>
+        <div class="page-controls-area">
+          <!-- Max Tokens -->
+          <div class="control-box">
+            <label for="chatMaxTokens"><span class="control-icon">🔤</span> Max Tokens</label>
+            <input type="number" id="chatMaxTokens" value="4096" min="128" max="65536" step="128">
           </div>
 
-          <div class="control-item">
-            <label for="chat-temperature">🌡️ Temperature:</label>
-            <input type="number" id="chat-temperature" class="control-input" value="0.7" min="0.0" max="2.0" step="0.1">
+          <!-- Temperature -->
+          <div class="control-box">
+            <label for="chatTemperature"><span class="control-icon">🌡️</span> Temperature</label>
+            <input type="number" id="chatTemperature" value="0.7" min="0.0" max="2.0" step="0.1">
           </div>
 
-          <div class="control-item">
-            <label for="chat-model-select">🧠 Model:</label>
-            <select id="chat-model-select" class="control-select" onchange="onModelChange()">
-              <option value="gemma-4-26b-a4b-it" selected>Gemma 4 26B A4B It</option>
-              <option value="gemini-flash-lite-latest">Gemini Flash Lite Latest</option>
-              <option value="custom">Custom Model</option>
+          <!-- Model Choice Dropdown -->
+          <div class="control-box">
+            <label for="chatModel"><span class="control-icon">🧠</span> Model</label>
+            <select id="chatModel">
+              <option value="gemma-4-26b-a4b-it">gemma-4-26b-a4b-it (Default)</option>
+              <option value="Custom Model">Custom Model (Endpoint)</option>
             </select>
           </div>
 
-          <div class="control-item" id="custom-endpoint-box" style="display: none;">
-            <label for="chat-custom-endpoint">🌐 Endpoint:</label>
-            <input type="text" id="chat-custom-endpoint" class="control-input" style="width: 250px;"
-              placeholder="http://127.0.0.1:8000/v1/chat/completions" value="http://127.0.0.1:8000/v1/chat/completions">
+          <!-- Custom Model Endpoint Field (Conditional) -->
+          <div class="control-box hidden" id="customEndpointBox">
+            <label for="customEndpoint"><span class="control-icon">🔗</span> Custom API Endpoint</label>
+            <input type="text" id="customEndpoint" value="http://127.0.0.1:8000/v1/chat/completions" placeholder="http://127.0.0.1:8000/v1/chat/completions">
           </div>
         </div>
       </div>
 
-      <div class="cards-grid-2">
-        <!-- Card 1: Chat with the Agent -->
-        <div class="ui-card">
-          <!-- Row 1: Title and Agent dropdown on the right side of the card -->
-          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <div class="card-title">💬 Chat with the Agent</div>
-            <div class="control-item">
-              <label for="chat-agent-select">🤖 Agent:</label>
-              <select id="chat-agent-select" class="control-select">
-                <option value="custom" selected>Custom Agent</option>
-                <option value="google_adk">Google ADK LlmAgent</option>
-              </select>
+      <!-- Two-Card Split Layout -->
+      <div class="split-cards-grid">
+        <!-- Left Card: Chat with the Agent -->
+        <div class="glass-card chat-card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="card-icon">🤖</span> Chat with the Agent
             </div>
-          </div>
-
-          <!-- Row 2: Max Turns, Max Chunks, Skills & Threshold -->
-          <div class="card-sub-header" style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.08));">
-            <div class="control-item">
-              <label for="chat-max-turns">🔄 Max Turns:</label>
-              <input type="number" id="chat-max-turns" class="control-input" value="3" min="1" max="10"
-                style="width: 55px;" oninput="clampMaxTurns(this)">
-            </div>
-
-            <div class="control-item">
-              <label for="rag-max-chunks">📚 Max Chunks:</label>
-              <select id="rag-max-chunks" class="control-select">
-                <option value="1">1</option>
-                <option value="3">3</option>
-                <option value="5" selected>5</option>
-                <option value="8">8</option>
-                <option value="10">10</option>
-              </select>
-            </div>
-
-            <div class="control-item">
-              <label for="chat-skills-select">⚡ Skills:</label>
-              <select id="chat-skills-select" class="control-select" onchange="onSkillsModeChange()">
-                <option value="vector_store" selected>Vector Store</option>
-                <option value="llm_selected">LLM Selected</option>
-              </select>
-            </div>
-
-            <div class="control-item" id="skill-threshold-box">
-              <label for="chat-skill-threshold">🎯 Threshold:</label>
-              <input type="number" id="chat-skill-threshold" class="control-input" value="0.2" min="0.0" max="1.0"
-                step="0.05" style="width: 65px;">
-            </div>
-          </div>
-
-          <!-- Chat Conversation UI inside the Card -->
-          <div class="chat-container">
-            <div id="chat-history" class="chat-history">
-              <div class="chat-message agent">
-                Welcome to Agent with RAG! Ask me questions, test domain queries against sample documents, check
-                employee records, stock market metrics, or current global weather and time.
+            <div class="card-action-group">
+              <div class="header-control">
+                <label for="agentChoice"><span class="control-icon">🤖</span> Agent:</label>
+                <select id="agentChoice">
+                  <option value="Custom Agent" selected>Custom Agent</option>
+                  <option value="Google ADK Agent">Google ADK LlmAgent</option>
+                </select>
+              </div>
+              <div class="header-control">
+                <label for="chatMaxTurns"><span class="control-icon">🔄</span> Max Turns:</label>
+                <input type="number" id="chatMaxTurns" value="3" min="1" max="10">
               </div>
             </div>
+          </div>
 
-            <div class="chat-input-bar">
-              <input type="text" id="chat-input" class="chat-input" placeholder="Ask a question or issue a command..."
-                onkeydown="if(event.key==='Enter') sendChatMessage()">
-              <button id="btn-send-chat" class="btn-primary" onclick="sendChatMessage()">Send</button>
+          <!-- Second Row Parameters -->
+          <div class="chat-param-row">
+            <div class="param-item">
+              <label for="chatSkills"><span class="param-icon">⚡</span> Skill Selector:</label>
+              <select id="chatSkills">
+                <option value="Vector Store Selects" selected>Vector Store Selects (Default)</option>
+                <option value="LLM Selects">LLM Selects</option>
+                <!-- Dynamic Skills populated by JS -->
+              </select>
             </div>
+            <div class="param-item" id="skillThresholdBox">
+              <label for="chatSkillThreshold"><span class="param-icon">🎯</span> Threshold:</label>
+              <input type="number" id="chatSkillThreshold" value="0.2" min="0.0" max="1.0" step="0.05">
+            </div>
+            <div class="param-item param-item-right">
+              <label for="chatRagChunks"><span class="param-icon">📑</span> Max RAG Chunks:</label>
+              <select id="chatRagChunks">
+                <option value="1">1 Chunk</option>
+                <option value="3">3 Chunks</option>
+                <option value="5" selected>5 Chunks</option>
+                <option value="10">10 Chunks</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Chat Conversation Scroll Area -->
+          <div class="chat-messages-container" id="chatMessages">
+            <div class="chat-welcome">
+              <div class="welcome-icon">💡</div>
+              <h3>AI Agent with RAG Ready</h3>
+              <p>Ask a question about the weather, personnel records, stock movements, or search our private knowledge documents.</p>
+              <div class="quick-prompts">
+                <button class="btn-chip" data-prompt="What is the current weather and local time in Tokyo?">🌤️ Weather in Tokyo</button>
+                <button class="btn-chip" data-prompt="Find Lucas Dubois in the person registry and show his job title.">👤 Lucas Dubois</button>
+                <button class="btn-chip" data-prompt="Which stocks have the highest percentage increase today?">📈 Top Gainers</button>
+                <button class="btn-chip" data-prompt="What is Agentic RAG and how does it compare to classic RAG?">📚 Agentic RAG</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Message Input Box -->
+          <div class="chat-input-container">
+            <textarea id="chatInput" rows="2" placeholder="Type your question here... (Press Enter to send, Shift+Enter for newline)"></textarea>
+            <button id="btnSendMessage" class="btn-send" title="Send Message">
+              <span class="send-icon">🚀</span>
+              <span class="send-text">Send</span>
+            </button>
           </div>
         </div>
 
-        <!-- Card 2: Retrieved Context Evidence -->
-        <div class="ui-card">
-          <div class="card-header" style="flex-wrap: wrap; gap: 8px;">
-            <div class="card-title">🔍 Retrieved Context Evidence</div>
-            <div class="card-header-controls" style="display: flex; align-items: center; gap: 10px;">
-              <div class="control-item">
-                <label for="doc-threshold">🎯 Doc Threshold:</label>
-                <input type="number" id="doc-threshold" class="control-input" value="0.3" min="0.0" max="1.0"
-                  step="0.05" style="width: 65px;">
+        <!-- Right Card: Retrieved Context Evidence -->
+        <div class="glass-card evidence-card">
+          <div class="card-header">
+            <div class="card-title">
+              <span class="card-icon">🔍</span> Retrieved Context Evidence
+            </div>
+            <div class="card-action-group">
+              <div class="mini-control">
+                <label for="docThresholdInput">Doc Threshold:</label>
+                <input type="number" id="docThresholdInput" value="0.3" min="0.0" max="1.0" step="0.05">
               </div>
-              <button class="btn-secondary" onclick="clearEvidenceView()">🧹 Clear View</button>
             </div>
           </div>
-          <div id="evidence-container" class="evidence-list">
-            <div style="color: var(--text-muted); font-size: 0.9rem; margin-top: 12px;">
-              Retrieved context chunks and skill tool outputs will appear here grouped by step (Skill Search, Document
-              Search).
+
+          <div class="evidence-body" id="evidenceContainer">
+            <div class="empty-placeholder">
+              <span class="empty-icon">📂</span>
+              <p>No retrieval context yet. Evidence from the skills store and document vector store will appear here grouped by source document.</p>
             </div>
           </div>
         </div>
       </div>
     </section>
 
-
-    <!-- PAGE 2: Vector DB Ingestion -->
-    <section id="page-ingest" class="tab-page">
-      <div class="page-top-bar">
-        <h2 class="page-title">📥 Vector DB Ingestion</h2>
-
-        <!-- Top Right Ingestion Controls -->
-        <div class="top-bar-controls">
-          <!-- Embedder Selector -->
-          <div class="control-item">
-            <label for="embedder-select">🧠 Embedder:</label>
-            <select id="embedder-select" class="control-select" onchange="onEmbedderSelectChange(this.value)">
-              <!-- Populated dynamically from API -->
+    <!-- ================================================================= -->
+    <!-- PAGE 2: Vector DB Ingestion                                      -->
+    <!-- ================================================================= -->
+    <section id="page-ingest" class="page-view">
+      <!-- Sub-Header Area -->
+      <div class="page-subheader">
+        <div class="page-title-area">
+          <h2 class="page-heading"><span class="heading-icon">📥</span> Vector DB Ingestion</h2>
+        </div>
+        <div class="page-controls-area">
+          <!-- Embedder Model Dropdown -->
+          <div class="control-box">
+            <label for="embedderSelect"><span class="control-icon">🧬</span> Active Embedder</label>
+            <select id="embedderSelect">
+              <option value="bge-m3">bge-m3 (Active)</option>
+              <option value="nomic-embed-text">nomic-embed-text</option>
+              <option value="all-minilm">all-minilm</option>
+              <option value="bge-large">bge-large</option>
             </select>
           </div>
 
           <!-- Update Skills Database Button -->
-          <button id="btn-update-skills" class="btn-secondary" onclick="updateSkillsDatabase()">⚡ Update Skills
-            Database</button>
+          <button id="btnUpdateSkills" class="btn-secondary">
+            <span class="icon">🔄</span> Update Skills Database
+          </button>
 
-          <!-- Ingestion Statistics -->
-          <div class="agent-status-box" id="ingest-stats-badge">
-            <span class="status-label">📦 Chunks:</span>
-            <span class="status-value" id="stat-chunks-count">0</span>
-            <span class="status-label" style="margin-left: 8px;">📄 Docs:</span>
-            <span class="status-value" id="stat-docs-count">0</span>
-            <span class="status-label" style="margin-left: 8px;">💾 DB Size:</span>
-            <span class="status-value" id="stat-db-size">0.0 MB</span>
+          <!-- Ingestion Statistics Pill -->
+          <div class="stats-pill" id="ingestStatsPill">
+            <div class="stat-pill-item"><span class="stat-val" id="statChunksCount">0</span> Chunks</div>
+            <div class="stat-pill-divider"></div>
+            <div class="stat-pill-item"><span class="stat-val" id="statDocsCount">0</span> Documents</div>
+            <div class="stat-pill-divider"></div>
+            <div class="stat-pill-item"><span class="stat-val" id="statDbSize">0.0</span> MB</div>
           </div>
         </div>
       </div>
 
-      <div class="cards-grid-2">
-        <!-- Left Card: Ingest Target -->
-        <div class="ui-card">
+      <!-- Top Two Half-Width Cards -->
+      <div class="split-cards-grid half-width-grid">
+        <!-- Left Card: Populate Vector Database -->
+        <div class="glass-card">
           <div class="card-header">
-            <div class="card-title">📥 Populate Vector Database</div>
-          </div>
-
-          <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px;">
-            Enter a web URL or a local folder/file path to create private vector embeddings in <code>database/</code>.
-          </div>
-
-          <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-            <select id="ingest-source-type" class="control-select" onchange="toggleIngestInputMode()">
-              <option value="url">Web URL</option>
-              <option value="local">Local Directory / File</option>
-            </select>
-            <input type="text" id="ingest-target-input" class="chat-input"
-              placeholder="https://example.com or /path/to/docs">
-          </div>
-
-          <!-- 5 Sample Web URL Buttons -->
-          <div id="url-preset-container">
-            <div style="font-size: 0.8rem; color: var(--text-muted);">Quick Sample Web URLs:</div>
-            <div class="preset-buttons">
-              <button class="preset-btn"
-                onclick="setIngestUrl('https://en.wikipedia.org/wiki/Retrieval-augmented_generation')">RAG
-                Wikipedia</button>
-              <button class="preset-btn"
-                onclick="setIngestUrl('https://en.wikipedia.org/wiki/Artificial_intelligence')">AI Wikipedia</button>
-              <button class="preset-btn" onclick="setIngestUrl('https://en.wikipedia.org/wiki/Vector_database')">Vector
-                DB Wiki</button>
-              <button class="preset-btn"
-                onclick="setIngestUrl('https://python.langchain.com/docs/introduction/')">LangChain Docs</button>
-              <button class="preset-btn"
-                onclick="setIngestUrl('https://en.wikipedia.org/wiki/Large_language_model')">LLM Wikipedia</button>
+            <div class="card-title">
+              <span class="card-icon">⚡</span> Populate Vector Database
             </div>
           </div>
-
-          <!-- Collapsed Advanced Chunking Parameters Sub Card -->
-          <button type="button" class="advanced-toggle" onclick="toggleAdvancedChunking()">
-            <span id="advanced-toggle-icon">▶</span> ⚙️ Advanced Chunking Parameters
-          </button>
-          <div id="advanced-chunking-card" class="advanced-card">
-            <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-              <div class="control-item">
-                <label for="chunk-size-input">Chunk Size (chars):</label>
-                <input type="number" id="chunk-size-input" class="control-input" value="500" min="50" max="5000">
-              </div>
-              <div class="control-item">
-                <label for="chunk-overlap-input">Overlap (chars):</label>
-                <input type="number" id="chunk-overlap-input" class="control-input" value="100" min="0" max="1000">
+          <div class="card-body">
+            <p class="section-desc">Create or extend the private ChromaDB vector database from web URLs or local directories.</p>
+            
+            <!-- Sample URL buttons -->
+            <div class="sample-urls-group">
+              <label class="field-label">Sample Web Documents:</label>
+              <div class="sample-url-buttons">
+                <button class="btn-sample-url" data-url="sample_docs/agent_and_rag.md">Agent & RAG Doc</button>
+                <button class="btn-sample_url" data-url="sample_docs/company_marketing_strategy.md">Marketing Strategy</button>
+                <button class="btn-sample-url" data-url="sample_docs/financial_report.md">Financial Report</button>
+                <button class="btn-sample-url" data-url="https://en.wikipedia.org/wiki/Retrieval-augmented_generation">Wikipedia RAG</button>
+                <button class="btn-sample-url" data-url="sample_docs/">All sample_docs/</button>
               </div>
             </div>
-            <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 6px;">
-              Deduplication is automatically enforced via cryptographic content hashing.
-            </div>
-          </div>
 
-          <div style="margin-top: auto; padding-top: 16px;">
-            <button id="btn-populate-db" class="btn-primary" style="width: 100%; justify-content: center;"
-              onclick="populateVectorDatabase()">
-              Populate Vector Database
-            </button>
+            <!-- Ingestion Input -->
+            <div class="form-group">
+              <label for="ingestSourceInput" class="field-label">URL or Local Path:</label>
+              <input type="text" id="ingestSourceInput" class="input-text" placeholder="https://example.com/article or sample_docs/file.md">
+            </div>
+
+            <!-- Collapsible Advanced Chunking Parameters -->
+            <div class="collapsible-card" id="chunkingCard">
+              <button type="button" class="collapsible-header" id="btnToggleChunking">
+                <span class="collapsible-title"><span class="icon">⚙️</span> Advanced Chunking Parameters</span>
+                <span class="collapsible-arrow">▼</span>
+              </button>
+              <div class="collapsible-content hidden" id="chunkingContent">
+                <div class="chunk-inputs-grid">
+                  <div class="form-group">
+                    <label for="inputChunkSize" class="field-label">Chunk Size (characters):</label>
+                    <input type="number" id="inputChunkSize" value="1000" min="100" max="8000" step="100">
+                  </div>
+                  <div class="form-group">
+                    <label for="inputChunkOverlap" class="field-label">Overlap (characters):</label>
+                    <input type="number" id="inputChunkOverlap" value="200" min="0" max="2000" step="50">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="action-footer">
+              <button id="btnPopulateDb" class="btn-primary">
+                <span class="icon">📥</span> Populate Vector Database
+              </button>
+              <span class="ingest-spinner hidden" id="ingestSpinner"><span class="spinner-icon">⏳</span> Ingesting content...</span>
+            </div>
           </div>
         </div>
 
         <!-- Right Card: Vector Storage Status -->
-        <div class="ui-card">
+        <div class="glass-card">
           <div class="card-header">
             <div class="card-title">
-              <span>📊 Vector Storage Status</span>
-              <span id="ingest-progress-spinner"
-                style="display: none; font-size: 0.8rem; color: var(--accent-cyan); margin-left: 8px;">⏳ Ingestion in
-                progress...</span>
+              <span class="card-icon">🗄️</span> Vector Storage Status
             </div>
-            <button id="btn-reset-db" class="btn-danger" onclick="resetDatabase()">Reset DB</button>
+            <div class="card-action-group">
+              <button id="btnResetDb" class="btn-danger-outline">
+                <span class="icon">🗑️</span> Reset DB
+              </button>
+            </div>
           </div>
+          <div class="card-body">
+            <div class="storage-status-banner" id="storageStatusBanner">
+              <span class="status-indicator-idle">Idle (Ready)</span>
+            </div>
 
-          <div class="ingestion-table-container">
-            <table class="ui-table">
+            <!-- Scrollable Ingested Documents List -->
+            <div class="table-scroll-container">
+              <table class="data-table" id="ingestedDocsTable">
+                <thead>
+                  <tr>
+                    <th>Document Name</th>
+                    <th>Chunks</th>
+                    <th>Characters</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="ingestedDocsTbody">
+                  <tr><td colspan="4" class="text-center text-muted">No documents ingested.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Card: Available Embedding Models -->
+      <div class="glass-card full-width-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="card-icon">🧬</span> Available Embedding Models
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-scroll-container">
+            <table class="data-table" id="availableModelsTable">
               <thead>
                 <tr>
-                  <th>Document Name</th>
-                  <th>Chunks Created</th>
-                  <th>Total Characters</th>
-                  <th style="width: 90px; text-align: right;">Action</th>
+                  <th>Model Name</th>
+                  <th>Dimensions</th>
+                  <th>Context Window</th>
+                  <th>Size</th>
+                  <th>Description</th>
+                  <th>Status</th>
                 </tr>
               </thead>
-              <tbody id="ingested-docs-tbody">
+              <tbody id="availableModelsTbody">
+                <!-- Populated dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================= -->
+    <!-- PAGE 3: Telemetry                                                -->
+    <!-- ================================================================= -->
+    <section id="page-telemetry" class="page-view">
+      <div class="page-subheader">
+        <div class="page-title-area">
+          <h2 class="page-heading"><span class="heading-icon">📊</span> Telemetry & Inference Metrics</h2>
+        </div>
+        <div class="page-controls-area">
+          <!-- Model Filter -->
+          <div class="control-box">
+            <label for="telemetryModelFilter"><span class="control-icon">🔍</span> Filter by Model</label>
+            <select id="telemetryModelFilter">
+              <option value="All Models" selected>All Models</option>
+            </select>
+          </div>
+
+          <!-- Refresh Button -->
+          <button id="btnRefreshTelemetry" class="btn-secondary">
+            <span class="icon">🔄</span> Refresh Telemetry
+          </button>
+        </div>
+      </div>
+
+      <!-- High-Level Metric Tiles -->
+      <div class="metric-tiles-grid">
+        <div class="metric-tile">
+          <div class="metric-label">Total Prompts</div>
+          <div class="metric-value" id="telTotalPrompts">0</div>
+        </div>
+        <div class="metric-tile">
+          <div class="metric-label">Total Responses</div>
+          <div class="metric-value" id="telTotalResponses">0</div>
+        </div>
+        <div class="metric-tile">
+          <div class="metric-label">Total Errors</div>
+          <div class="metric-value text-danger" id="telTotalErrors">0</div>
+        </div>
+        <div class="metric-tile">
+          <div class="metric-label">Total Input Tokens</div>
+          <div class="metric-value" id="telTotalInTokens">0</div>
+        </div>
+        <div class="metric-tile">
+          <div class="metric-label">Total Output Tokens</div>
+          <div class="metric-value" id="telTotalOutTokens">0</div>
+        </div>
+      </div>
+
+      <!-- Top Card: System Throughput & Token Velocity (2 Graphs) -->
+      <div class="glass-card full-width-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="card-icon">📈</span> System Throughput & Token Velocity
+          </div>
+          <div class="card-action-group">
+            <div class="mini-control">
+              <label for="telIntervalSelect">Interval:</label>
+              <select id="telIntervalSelect">
+                <option value="1 min">1 min</option>
+                <option value="15 min" selected>15 min (Default)</option>
+                <option value="1 hr">1 hr</option>
+                <option value="1 day">1 day</option>
+              </select>
+            </div>
+            <div class="mini-control">
+              <label for="telRangeSelect">Time Range:</label>
+              <select id="telRangeSelect">
+                <option value="Last hr">Last hr</option>
+                <option value="1 day" selected>1 day (Default)</option>
+                <option value="Week">Week</option>
+                <option value="Month">Month</option>
+                <option value="Custom">Custom</option>
+              </select>
+            </div>
+            <div class="custom-date-pickers hidden" id="customDateBoxes">
+              <input type="date" id="telStartDate">
+              <span>to</span>
+              <input type="date" id="telEndDate">
+            </div>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <div class="charts-double-grid">
+            <!-- Left Plot: Prompts, Responses, Errors -->
+            <div class="chart-wrapper">
+              <h4 class="chart-title">Request Throughput (Prompts / Responses / Errors)</h4>
+              <div class="canvas-container">
+                <canvas id="chartThroughput"></canvas>
+              </div>
+            </div>
+
+            <!-- Right Plot: Input & Output Tokens -->
+            <div class="chart-wrapper">
+              <h4 class="chart-title">Token Velocity (Input & Output Tokens)</h4>
+              <div class="canvas-container">
+                <canvas id="chartTokens"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Card: Other Important Statistic not Available for Low-Performance Computer -->
+      <div class="glass-card full-width-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="card-icon">⚡</span> Other Important Statistic not Available for Low-Performance Computer
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="advanced-stats-grid">
+            <div class="adv-stat-card">
+              <div class="adv-stat-header">
+                <span class="adv-stat-tag">TTFT</span>
+                <h4>Time to First Token</h4>
+              </div>
+              <div class="adv-stat-value" id="valTtft">0.0 ms</div>
+              <p class="adv-stat-desc">The duration between a user sending a prompt and receiving the very first token. Critical metric for perceived speed in interactive streaming.</p>
+            </div>
+
+            <div class="adv-stat-card">
+              <div class="adv-stat-header">
+                <span class="adv-stat-tag">ITL</span>
+                <h4>Inter-Token Latency</h4>
+              </div>
+              <div class="adv-stat-value" id="valItl">0.0 ms</div>
+              <p class="adv-stat-desc">The average time elapsed between generating each subsequent token during response generation.</p>
+            </div>
+
+            <div class="adv-stat-card">
+              <div class="adv-stat-header">
+                <span class="adv-stat-tag">TPS</span>
+                <h4>Tokens Per Second</h4>
+              </div>
+              <div class="adv-stat-value" id="valTps">0.0 tok/s</div>
+              <p class="adv-stat-desc">The throughput speed of model generation measured as output tokens produced per second.</p>
+            </div>
+
+            <div class="adv-stat-card">
+              <div class="adv-stat-header">
+                <span class="adv-stat-tag">TPOT</span>
+                <h4>Time Per Output Token</h4>
+              </div>
+              <div class="adv-stat-value" id="valTpot">0.0 ms/tok</div>
+              <p class="adv-stat-desc">The total generation latency divided by the total count of output tokens returned.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================= -->
+    <!-- PAGE 4: Audit Log & Event                                        -->
+    <!-- ================================================================= -->
+    <section id="page-audit" class="page-view">
+      <div class="page-subheader">
+        <div class="page-title-area">
+          <h2 class="page-heading"><span class="heading-icon">📜</span> Audit Log & Event</h2>
+        </div>
+        <div class="page-controls-area">
+          <button id="btnClearLogs" class="btn-danger-outline">
+            <span class="icon">🗑️</span> Clear Logs
+          </button>
+          <button id="btnRefreshLogs" class="btn-secondary">
+            <span class="icon">🔄</span> Refresh
+          </button>
+
+          <!-- Audit Stats Pill -->
+          <div class="stats-pill">
+            <div class="stat-pill-item"><span class="stat-val" id="auditTotalPrompts">0</span> Prompts</div>
+            <div class="stat-pill-divider"></div>
+            <div class="stat-pill-item"><span class="stat-val" id="auditModelCalls">0</span> Model Calls</div>
+            <div class="stat-pill-divider"></div>
+            <div class="stat-pill-item"><span class="stat-val" id="auditOllamaEmbeds">0</span> Ollama Embeds</div>
+            <div class="stat-pill-divider"></div>
+            <div class="stat-pill-item"><span class="stat-val" id="auditAvgLatency">0.0</span> ms Latency</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Top Table: User Conversations -->
+      <div class="glass-card full-width-card mb-4">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="card-icon">💬</span> User Conversations (Select a row to inspect associated events)
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-scroll-container conversation-table-scroll">
+            <table class="data-table selectable-table" id="conversationsTable">
+              <thead>
                 <tr>
-                  <td colspan="4" style="text-align: center; color: var(--text-muted);">No documents ingested yet.</td>
+                  <th>Timestamp (Local)</th>
+                  <th>Conversation ID</th>
+                  <th>User Query</th>
+                  <th>Agent Response</th>
+                  <th>Agent Type</th>
+                  <th>Events</th>
                 </tr>
+              </thead>
+              <tbody id="conversationsTbody">
+                <tr><td colspan="6" class="text-center text-muted">No conversations recorded yet.</td></tr>
               </tbody>
             </table>
           </div>
         </div>
       </div>
 
-      <!-- Bottom Card: Available Embedding Models Catalog -->
-      <div class="ui-card">
+      <!-- Bottom Table: Events for Conversation -->
+      <div class="glass-card full-width-card">
         <div class="card-header">
-          <div class="card-title">🧩 Available Embedding Models Catalog</div>
-        </div>
-        <div style="overflow-x: auto;">
-          <table class="ui-table">
-            <thead>
-              <tr>
-                <th>Model Name</th>
-                <th>Dimensions</th>
-                <th>Context Window</th>
-                <th>Size</th>
-                <th>Brief Description</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody id="embedding-catalog-tbody">
-              <!-- Dynamically populated from /api/ollama/models -->
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-
-    <!-- PAGE 3: Telemetry -->
-    <section id="page-telemetry" class="tab-page">
-      <div class="page-top-bar">
-        <h2 class="page-title">📊 Telemetry</h2>
-
-        <div class="top-bar-controls">
-          <div class="control-item">
-            <label for="telemetry-model-filter">🧠 Model Filter:</label>
-            <select id="telemetry-model-filter" class="control-select" onchange="fetchTelemetryData()">
-              <option value="All Models">All Models</option>
-            </select>
-          </div>
-
-          <button id="btn-refresh-telemetry" class="btn-secondary" onclick="fetchTelemetryData()">🔄 Refresh
-            Telemetry</button>
-        </div>
-      </div>
-
-      <!-- 5 Metric Tiles -->
-      <div class="kpi-row">
-        <div class="kpi-tile">
-          <div class="kpi-label">💬 Total Prompts</div>
-          <div class="kpi-value" id="kpi-total-prompts">0</div>
-        </div>
-        <div class="kpi-tile">
-          <div class="kpi-label">🤖 Total Response</div>
-          <div class="kpi-value" id="kpi-total-responses">0</div>
-        </div>
-        <div class="kpi-tile">
-          <div class="kpi-label">⚠️ Total Errors</div>
-          <div class="kpi-value" id="kpi-total-errors" style="color: var(--accent-rose);">0</div>
-        </div>
-        <div class="kpi-tile">
-          <div class="kpi-label">📥 Total Input Tokens</div>
-          <div class="kpi-value" id="kpi-input-tokens">0</div>
-        </div>
-        <div class="kpi-tile">
-          <div class="kpi-label">📤 Total Output Tokens</div>
-          <div class="kpi-value" id="kpi-output-tokens">0</div>
-        </div>
-      </div>
-
-      <!-- Card Showing 2 Graphs -->
-      <div class="ui-card" style="margin-bottom: 24px;">
-        <div class="card-header" style="flex-wrap: wrap; gap: 12px;">
-          <div class="card-title">📈 System Throughput &amp; Token Velocity</div>
-          <div class="top-bar-controls">
-            <div class="control-item">
-              <label for="chart-interval">⏱️ Aggregation Interval:</label>
-              <select id="chart-interval" class="control-select" onchange="fetchTelemetryData()">
-                <option value="1 min">1 min</option>
-                <option value="15 min" selected>15 min</option>
-                <option value="1 hr">1 hr</option>
-                <option value="1 day">1 day</option>
-              </select>
-            </div>
-
-            <div class="control-item">
-              <label for="chart-timerange">📅 Time Range:</label>
-              <select id="chart-timerange" class="control-select" onchange="onTimeRangeChange()">
-                <option value="Last hr">Last hr</option>
-                <option value="1 day" selected>1 day</option>
-                <option value="Week">Week</option>
-                <option value="Month">Month</option>
-                <option value="Custom">Custom</option>
-              </select>
-            </div>
-
-            <!-- Custom Date Dropdowns -->
-            <div id="custom-date-range-box" style="display: none; gap: 8px;">
-              <input type="date" id="custom-start-date" class="control-input" onchange="fetchTelemetryData()">
-              <input type="date" id="custom-end-date" class="control-input" onchange="fetchTelemetryData()">
-            </div>
+          <div class="card-title" id="eventsTableTitle">
+            <span class="card-icon">⚡</span> Events for Conversation: <span class="badge" id="selectedConvBadge">None Selected</span>
           </div>
         </div>
-
-        <div class="cards-grid-2" style="margin-bottom: 0;">
-          <div style="height: 280px; position: relative;">
-            <canvas id="chart-requests"></canvas>
+        <div class="card-body">
+          <div class="table-scroll-container">
+            <table class="data-table" id="eventsTable">
+              <thead>
+                <tr>
+                  <th>Time & Date (Local)</th>
+                  <th>Event Type</th>
+                  <th>Invoker</th>
+                  <th>Target</th>
+                  <th>Short Description</th>
+                </tr>
+              </thead>
+              <tbody id="eventsTbody">
+                <tr><td colspan="5" class="text-center text-muted">Select a conversation row above to view its detailed event trace.</td></tr>
+              </tbody>
+            </table>
           </div>
-          <div style="height: 280px; position: relative;">
-            <canvas id="chart-tokens"></canvas>
-          </div>
-        </div>
-      </div>
-
-      <!-- Bottom Card: Important Low-Performance Metrics -->
-      <div class="ui-card">
-        <div class="card-header">
-          <div class="card-title">ℹ️ Other Important Statistic not Available for Low-Performance Computer</div>
-        </div>
-        <div
-          style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; font-size: 0.88rem; color: var(--text-secondary);">
-          <div>
-            <strong style="color: var(--accent-cyan);">Time to First Token (TTFT):</strong>
-            <p style="margin-top: 4px; line-height: 1.45;">The duration between a user sending a prompt and receiving
-              the very first token. This is the most critical metric for perceived speed in streaming applications.</p>
-          </div>
-          <div>
-            <strong style="color: var(--accent-cyan);">Inter-Token Latency (ITL):</strong>
-            <p style="margin-top: 4px; line-height: 1.45;">The average time elapsed between generating each subsequent
-              token.</p>
-          </div>
-          <div>
-            <strong style="color: var(--accent-cyan);">Tokens Per Second (TPS):</strong>
-            <p style="margin-top: 4px; line-height: 1.45;">The throughput speed of the model generation (often measured
-              per request or aggregated across the server).</p>
-          </div>
-          <div>
-            <strong style="color: var(--accent-cyan);">Time Per Output Token (TPOT):</strong>
-            <p style="margin-top: 4px; line-height: 1.45;">The total time taken to generate the response divided by the
-              number of output tokens.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-
-    <!-- PAGE 4: Audit Log & Event -->
-    <section id="page-audit" class="tab-page">
-      <div class="page-top-bar">
-        <h2 class="page-title">📜 Audit Log &amp; Event</h2>
-
-        <div class="top-bar-controls">
-          <button id="btn-open-clear-logs" class="btn-danger" onclick="openClearLogsModal()">🗑️ Clear Logs</button>
-          <button id="btn-refresh-logs" class="btn-secondary" onclick="fetchLogsData()">🔄 Refresh</button>
-        </div>
-      </div>
-
-      <!-- 4 Audit Log KPI Tiles -->
-      <div class="kpi-row">
-        <div class="kpi-tile">
-          <div class="kpi-label">💬 Total User Prompts</div>
-          <div class="kpi-value" id="kpi-log-prompts">0</div>
-        </div>
-        <div class="kpi-tile">
-          <div class="kpi-label">🧠 Model Calls</div>
-          <div class="kpi-value" id="kpi-log-model-calls">0</div>
-        </div>
-        <div class="kpi-tile">
-          <div class="kpi-label">⚡ Ollama Embeds</div>
-          <div class="kpi-value" id="kpi-log-embeds">0</div>
-        </div>
-        <div class="kpi-tile">
-          <div class="kpi-label">⏱️ Avg Call Latency</div>
-          <div class="kpi-value" id="kpi-log-latency">0.0 ms</div>
-        </div>
-      </div>
-
-      <!-- Table 1: User Conversations -->
-      <div class="ui-card" style="margin-bottom: 24px;">
-        <div class="card-header">
-          <div class="card-title">💬 User Conversations (Select a row to inspect associated events)</div>
-          <div style="font-size: 0.85rem; color: var(--text-muted);" id="conv-total-count">Total Conversations: 0</div>
-        </div>
-        <div style="max-height: 380px; overflow-y: auto;">
-          <table class="ui-table">
-            <thead>
-              <tr>
-                <th>Timestamp (Local)</th>
-                <th>Conversation ID</th>
-                <th>User Query</th>
-                <th>Agent Response</th>
-                <th>Agent Type</th>
-                <th>Number of Events (occured during the conversation)</th>
-              </tr>
-            </thead>
-            <tbody id="conversations-tbody">
-              <tr>
-                <td colspan="6" style="text-align: center; color: var(--text-muted);">No conversation logs recorded yet.
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Table 2: Associated Logs for Selected Conversation -->
-      <div class="ui-card">
-        <div class="card-header">
-          <div class="card-title" id="events-table-title">Events for Conversation for None</div>
-          <span style="font-size: 0.8rem; color: var(--text-muted);">Click any row to inspect raw payload &amp;
-            response</span>
-        </div>
-        <div style="max-height: 380px; overflow-y: auto;">
-          <table class="ui-table">
-            <thead>
-              <tr>
-                <th>Time and Date (local time)</th>
-                <th>Event Type</th>
-                <th>Invoker</th>
-                <th>Target</th>
-                <th>Short Description</th>
-              </tr>
-            </thead>
-            <tbody id="events-tbody">
-              <tr>
-                <td colspan="5" style="text-align: center; color: var(--text-muted);">Select a conversation above to
-                  view event logs.</td>
-              </tr>
-            </tbody>
-          </table>
         </div>
       </div>
     </section>
 
   </main>
 
-  <!-- ================= MODALS ================= -->
+  <!-- =================================================================== -->
+  <!-- MODAL DIALOGS                                                       -->
+  <!-- =================================================================== -->
 
-  <!-- 1. Shutdown Confirmation Modal -->
-  <div id="modal-shutdown" class="modal-overlay">
-    <div class="modal-dialog">
-      <div class="modal-header">⚠️ Warning: Shutdown App &amp; Services</div>
+  <!-- Modal 1: Shutdown Warning Dialog -->
+  <div class="modal-overlay hidden" id="shutdownModal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3><span class="modal-icon text-danger">⚠️</span> Shutdown Application and Services</h3>
+      </div>
       <div class="modal-body">
-        This action will shutdown the app and all the services started by the app. All users will be affected by this
-        action.
-        <p style="margin-top: 10px; font-weight: 600;">Confirm by typing <span
-            style="color: var(--accent-rose);">“Shutdown the service”</span> below:</p>
-        <input type="text" id="shutdown-confirm-input" class="confirm-input" placeholder="Shutdown the service"
-          oninput="validateShutdownConfirm(this.value)">
+        <p class="modal-alert-text">
+          Warning: This action will shutdown the app and all backend services started by it. All users will be affected by this action.
+        </p>
+        <p>To confirm, please type exactly <strong>Shutdown the service</strong> in the box below:</p>
+        <input type="text" id="shutdownConfirmInput" class="input-text" placeholder="Shutdown the service">
       </div>
       <div class="modal-footer">
-        <button class="btn-secondary" onclick="closeModal('modal-shutdown')">Cancel</button>
-        <button id="btn-confirm-shutdown" class="btn-danger" disabled onclick="executeShutdown()">Confirm</button>
+        <button id="btnCancelShutdown" class="btn-secondary">Cancel</button>
+        <button id="btnConfirmShutdown" class="btn-danger" disabled>Confirm</button>
       </div>
     </div>
   </div>
 
-  <!-- 2. Model Change Warning Modal -->
-  <div id="modal-switch-model" class="modal-overlay">
-    <div class="modal-dialog">
-      <div class="modal-header" style="color: var(--accent-rose);">⚠️ Stern Warning: Delete Vector Data</div>
+  <!-- Modal 2: Change Embedder Model Stern Warning Dialog -->
+  <div class="modal-overlay hidden" id="changeModelModal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3><span class="modal-icon text-danger">⚠️</span> Change Embedder Model</h3>
+      </div>
       <div class="modal-body">
-        Changing the embedding model will <strong>delete all vector data</strong> currently stored in the document and
-        skill databases!
-        <p style="margin-top: 10px;">To confirm, please type <span
-            style="color: var(--accent-rose); font-weight: 600;">“Delete Data and Switch”</span>:</p>
-        <input type="text" id="model-switch-confirm-input" class="confirm-input" placeholder="Delete Data and Switch"
-          oninput="validateModelSwitchConfirm(this.value)">
+        <p class="modal-alert-text">
+          STERN WARNING: Changing the embedding model will <strong>delete all vector data</strong> currently in the document and skill databases! Vectors generated with different models cannot be mixed.
+        </p>
+        <p>New model selected: <strong id="modalTargetModelName">nomic-embed-text</strong></p>
+        <p>To confirm, please type exactly <strong>Change model and delete data</strong> in the box below:</p>
+        <input type="text" id="changeModelConfirmInput" class="input-text" placeholder="Change model and delete data">
       </div>
       <div class="modal-footer">
-        <button class="btn-secondary" onclick="cancelModelSwitch()">Cancel</button>
-        <button id="btn-confirm-switch-model" class="btn-danger" disabled onclick="executeModelSwitch()">Delete
-          Data</button>
+        <button id="btnCancelChangeModel" class="btn-secondary">Cancel</button>
+        <button id="btnConfirmChangeModel" class="btn-danger" disabled>Delete Data</button>
       </div>
     </div>
   </div>
 
-  <!-- 3. Clear Logs Confirmation Modal -->
-  <div id="modal-clear-logs" class="modal-overlay">
-    <div class="modal-dialog">
-      <div class="modal-header">⚠️ Clear All Audit Logs</div>
+  <!-- Modal 3: Clear Logs Confirmation Dialog -->
+  <div class="modal-overlay hidden" id="clearLogsModal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3><span class="modal-icon text-danger">⚠️</span> Clear Audit Logs</h3>
+      </div>
       <div class="modal-body">
-        Are you sure you want to permanently delete all recorded audit events, logs, and telemetry history?
+        <p>Are you sure you want to delete all audit and conversation logs from <code>database/log.json</code>? This action cannot be undone.</p>
       </div>
       <div class="modal-footer">
-        <button class="btn-secondary" onclick="closeModal('modal-clear-logs')">Cancel</button>
-        <button class="btn-danger" onclick="executeClearLogs()">Confirm Clear</button>
+        <button id="btnCancelClearLogs" class="btn-secondary">Cancel</button>
+        <button id="btnConfirmClearLogs" class="btn-danger">Confirm Delete</button>
       </div>
     </div>
   </div>
 
-  <!-- 4. Detailed JSON Log Inspection Modal -->
-  <div id="modal-json-detail" class="modal-overlay">
-    <div class="modal-dialog" style="max-width: 720px;">
-      <div class="modal-header" id="json-modal-title">Event Detail Payload</div>
+  <!-- Modal 4: Event Detail JSON Inspector Dialog -->
+  <div class="modal-overlay hidden" id="eventDetailModal">
+    <div class="modal-box modal-box-large">
+      <div class="modal-header">
+        <h3><span class="modal-icon">📄</span> Audit Event Payload Inspector</h3>
+        <button id="btnCloseEventModal" class="btn-close">&times;</button>
+      </div>
       <div class="modal-body">
-        <pre id="json-modal-content" class="json-pre"></pre>
+        <div class="event-meta-grid" id="eventModalMeta">
+          <!-- Meta items dynamically injected -->
+        </div>
+
+        <!-- Prompt Section -->
+        <div class="event-detail-section">
+          <div class="event-detail-section-title">
+            <span>💬</span> Prompt / Input
+          </div>
+          <div id="eventModalPromptContainer"></div>
+        </div>
+
+        <!-- Response Section -->
+        <div class="event-detail-section">
+          <div class="event-detail-section-title">
+            <span>🤖</span> Response / Output
+          </div>
+          <div id="eventModalResponseContainer"></div>
+        </div>
+
+        <!-- Complete Raw JSON Section -->
+        <div class="event-detail-section">
+          <div class="event-detail-section-title">
+            <span>📋</span> Complete Event Payload (Raw JSON)
+          </div>
+          <div class="json-viewer-container">
+            <div class="json-viewer-header">
+              <span>Full Event Payload</span>
+              <button id="btnCopyJson" class="btn-copy">📋 Copy</button>
+            </div>
+            <pre class="json-code-block" id="eventModalJson"></pre>
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
-        <button class="btn-primary" onclick="closeModal('modal-json-detail')">Close</button>
+        <button id="btnCloseEventModal2" class="btn-secondary">Close</button>
       </div>
     </div>
   </div>
 
+  <!-- Scripts -->
+  <script src="/static/js/chart.umd.min.js"></script>
   <script src="/static/js/app.js"></script>
 </body>
-
 </html>

@@ -1,1031 +1,1216 @@
 /**
- * Agent with RAG Frontend Controller
- * Manages 4 views, API integrations, polling, charts, and modal dialogs.
+ * Agent With RAG - Web Application Frontend Controller
  */
 
-// Application State
-let currentTab = 'chat';
-let activeConversationId = null;
-let currentEmbeddingModel = '';
-let targetEmbeddingModelToSwitch = '';
-let requestsChart = null;
-let tokensChart = null;
-let modelMaxTokensMap = {};
-let allEventsCache = [];
-
-// DOM Ready Initialization
 document.addEventListener('DOMContentLoaded', () => {
-  initHealthPolling();
-  loadModelsList();
-  loadSkillsDropdown();
-  loadIngestData();
-  fetchTelemetryData();
-  fetchLogsData();
-});
+  // Global State
+  let currentActiveTab = 'page-chat';
+  let activeEmbedderModel = 'bge-m3';
+  let availableModelsData = [];
+  let chartThroughputInstance = null;
+  let chartTokensInstance = null;
+  let selectedConversationId = null;
+  let currentConversationsCache = [];
+  let currentEventsCache = [];
 
-// ----------------- Tab Navigation -----------------
-function switchTab(tabName) {
-  currentTab = tabName;
-  document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-  document.querySelectorAll('.tab-page').forEach(page => page.classList.remove('active'));
+  // DOM Elements - Navigation & Header
+  const navTabs = document.querySelectorAll('.nav-tab');
+  const pageViews = document.querySelectorAll('.page-view');
+  const statusDot = document.getElementById('statusDot');
+  const statusSummary = document.getElementById('statusSummary');
+  const tooltipAgent = document.getElementById('tooltipAgent');
+  const tooltipOllama = document.getElementById('tooltipOllama');
+  const tooltipEmbedder = document.getElementById('tooltipEmbedder');
+  const tooltipVector = document.getElementById('tooltipVector');
+  const tooltipLlm = document.getElementById('tooltipLlm');
 
-  const activeBtn = document.getElementById(`tab-btn-${tabName}`);
-  const activePage = document.getElementById(`page-${tabName}`);
-  if (activeBtn) activeBtn.classList.add('active');
-  if (activePage) activePage.classList.add('active');
+  // DOM Elements - Shutdown Modal
+  const btnShutdown = document.getElementById('btnShutdown');
+  const shutdownModal = document.getElementById('shutdownModal');
+  const shutdownConfirmInput = document.getElementById('shutdownConfirmInput');
+  const btnCancelShutdown = document.getElementById('btnCancelShutdown');
+  const btnConfirmShutdown = document.getElementById('btnConfirmShutdown');
 
-  if (tabName === 'ingest') {
-    loadIngestData();
-  } else if (tabName === 'telemetry') {
-    fetchTelemetryData();
-  } else if (tabName === 'audit') {
-    fetchLogsData();
-  }
-}
+  // DOM Elements - Page 1 (Chat)
+  const chatModel = document.getElementById('chatModel');
+  const customEndpointBox = document.getElementById('customEndpointBox');
+  const customEndpoint = document.getElementById('customEndpoint');
+  const chatTemperature = document.getElementById('chatTemperature');
+  const chatMaxTokens = document.getElementById('chatMaxTokens');
+  const agentChoice = document.getElementById('agentChoice');
+  const chatMaxTurns = document.getElementById('chatMaxTurns');
+  const chatRagChunks = document.getElementById('chatRagChunks');
+  const chatSkills = document.getElementById('chatSkills');
+  const skillThresholdBox = document.getElementById('skillThresholdBox');
+  const chatSkillThreshold = document.getElementById('chatSkillThreshold');
+  const docThresholdInput = document.getElementById('docThresholdInput');
+  const chatMessages = document.getElementById('chatMessages');
+  const chatInput = document.getElementById('chatInput');
+  const btnSendMessage = document.getElementById('btnSendMessage');
+  const evidenceContainer = document.getElementById('evidenceContainer');
 
-// ----------------- Health & Status Polling -----------------
-function initHealthPolling() {
-  checkHealth();
-  setInterval(checkHealth, 5000);
-}
+  // DOM Elements - Page 2 (Ingestion)
+  const embedderSelect = document.getElementById('embedderSelect');
+  const btnUpdateSkills = document.getElementById('btnUpdateSkills');
+  const statChunksCount = document.getElementById('statChunksCount');
+  const statDocsCount = document.getElementById('statDocsCount');
+  const statDbSize = document.getElementById('statDbSize');
+  const ingestSourceInput = document.getElementById('ingestSourceInput');
+  const btnToggleChunking = document.getElementById('btnToggleChunking');
+  const chunkingContent = document.getElementById('chunkingContent');
+  const inputChunkSize = document.getElementById('inputChunkSize');
+  const inputChunkOverlap = document.getElementById('inputChunkOverlap');
+  const btnPopulateDb = document.getElementById('btnPopulateDb');
+  const ingestSpinner = document.getElementById('ingestSpinner');
+  const btnResetDb = document.getElementById('btnResetDb');
+  const storageStatusBanner = document.getElementById('storageStatusBanner');
+  const ingestedDocsTbody = document.getElementById('ingestedDocsTbody');
+  const availableModelsTbody = document.getElementById('availableModelsTbody');
 
-async function checkHealth() {
-  try {
-    const res = await fetch('/api/health');
-    const data = await res.json();
-    const dot = document.getElementById('status-indicator');
-    const text = document.getElementById('status-agent-text');
+  // DOM Elements - Change Model Modal
+  const changeModelModal = document.getElementById('changeModelModal');
+  const modalTargetModelName = document.getElementById('modalTargetModelName');
+  const changeModelConfirmInput = document.getElementById('changeModelConfirmInput');
+  const btnCancelChangeModel = document.getElementById('btnCancelChangeModel');
+  const btnConfirmChangeModel = document.getElementById('btnConfirmChangeModel');
+  let pendingModelSwitch = null;
 
-    if (data.status === 'healthy') {
-      dot.className = 'status-dot';
-      text.textContent = 'Online';
-      text.style.color = 'var(--accent-emerald)';
-    } else {
-      dot.className = 'status-dot degraded';
-      text.textContent = 'Degraded';
-      text.style.color = 'var(--accent-amber)';
-    }
-  } catch (err) {
-    const dot = document.getElementById('status-indicator');
-    const text = document.getElementById('status-agent-text');
-    dot.className = 'status-dot offline';
-    text.textContent = 'Offline';
-    text.style.color = 'var(--accent-rose)';
-  }
-}
+  // DOM Elements - Page 3 (Telemetry)
+  const telemetryModelFilter = document.getElementById('telemetryModelFilter');
+  const btnRefreshTelemetry = document.getElementById('btnRefreshTelemetry');
+  const telTotalPrompts = document.getElementById('telTotalPrompts');
+  const telTotalResponses = document.getElementById('telTotalResponses');
+  const telTotalErrors = document.getElementById('telTotalErrors');
+  const telTotalInTokens = document.getElementById('telTotalInTokens');
+  const telTotalOutTokens = document.getElementById('telTotalOutTokens');
+  const telIntervalSelect = document.getElementById('telIntervalSelect');
+  const telRangeSelect = document.getElementById('telRangeSelect');
+  const customDateBoxes = document.getElementById('customDateBoxes');
+  const telStartDate = document.getElementById('telStartDate');
+  const telEndDate = document.getElementById('telEndDate');
+  const valTtft = document.getElementById('valTtft');
+  const valItl = document.getElementById('valItl');
+  const valTps = document.getElementById('valTps');
+  const valTpot = document.getElementById('valTpot');
 
-// ----------------- Shutdown Modal Flow -----------------
-function openShutdownModal() {
-  document.getElementById('shutdown-confirm-input').value = '';
-  document.getElementById('btn-confirm-shutdown').disabled = true;
-  openModal('modal-shutdown');
-}
+  // DOM Elements - Page 4 (Audit Log)
+  const btnClearLogs = document.getElementById('btnClearLogs');
+  const btnRefreshLogs = document.getElementById('btnRefreshLogs');
+  const auditTotalPrompts = document.getElementById('auditTotalPrompts');
+  const auditModelCalls = document.getElementById('auditModelCalls');
+  const auditOllamaEmbeds = document.getElementById('auditOllamaEmbeds');
+  const auditAvgLatency = document.getElementById('auditAvgLatency');
+  const conversationsTbody = document.getElementById('conversationsTbody');
+  const eventsTbody = document.getElementById('eventsTbody');
+  const selectedConvBadge = document.getElementById('selectedConvBadge');
+  const clearLogsModal = document.getElementById('clearLogsModal');
+  const btnCancelClearLogs = document.getElementById('btnCancelClearLogs');
+  const btnConfirmClearLogs = document.getElementById('btnConfirmClearLogs');
 
-function validateShutdownConfirm(val) {
-  const btn = document.getElementById('btn-confirm-shutdown');
-  btn.disabled = (val.trim() !== 'Shutdown the service');
-}
+  // DOM Elements - Event Detail Modal
+  const eventDetailModal = document.getElementById('eventDetailModal');
+  const eventModalMeta = document.getElementById('eventModalMeta');
+  const eventModalPromptContainer = document.getElementById('eventModalPromptContainer');
+  const eventModalResponseContainer = document.getElementById('eventModalResponseContainer');
+  const eventModalJson = document.getElementById('eventModalJson');
+  const btnCloseEventModal = document.getElementById('btnCloseEventModal');
+  const btnCloseEventModal2 = document.getElementById('btnCloseEventModal2');
+  const btnCopyJson = document.getElementById('btnCopyJson');
 
-async function executeShutdown() {
-  const confirmInput = document.getElementById('shutdown-confirm-input').value;
-  try {
-    const res = await fetch('/api/shutdown', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirm_text: confirmInput })
-    });
-    const data = await res.json();
-    closeModal('modal-shutdown');
-    alert(data.message || 'Shutdown command executed.');
-    document.getElementById('status-agent-text').textContent = 'Terminated';
-    document.getElementById('status-indicator').className = 'status-dot offline';
-  } catch (e) {
-    alert('Shutdown executed. Server process is terminating.');
-  }
-}
+  // ---------------------------------------------------------------------------
+  // Tab Navigation
+  // ---------------------------------------------------------------------------
+  navTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const targetId = tab.getAttribute('data-target');
+      if (!targetId || targetId === currentActiveTab) return;
 
-// ----------------- PAGE 1: Chat & Synthesis -----------------
-async function loadModelsList() {
-  try {
-    const res = await fetch('/api/models');
-    const data = await res.json();
-    const select = document.getElementById('chat-model-select');
-    select.innerHTML = '';
+      navTabs.forEach(t => t.classList.remove('active'));
+      pageViews.forEach(p => p.classList.remove('active'));
 
-    modelMaxTokensMap = {};
-    (data.models || []).forEach(m => {
-      modelMaxTokensMap[m.id] = m.max_tokens || 4096;
-      const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.name;
-      select.appendChild(opt);
-    });
+      tab.classList.add('active');
+      const targetPage = document.getElementById(targetId);
+      if (targetPage) targetPage.classList.add('active');
 
-    if (data.last_custom_endpoint) {
-      document.getElementById('chat-custom-endpoint').value = data.last_custom_endpoint;
-    }
+      currentActiveTab = targetId;
 
-    const defaultModel = data.default_model || 'gemma-4-26b-a4b-it';
-    if (defaultModel && Array.from(select.options).some(o => o.value === defaultModel)) {
-      select.value = defaultModel;
-    }
-    onModelChange();
-  } catch (e) {
-    console.error('Failed to load model list:', e);
-  }
-}
-
-function clampMaxTokens(el) {
-  const select = document.getElementById('chat-model-select');
-  const selectedModel = select ? select.value : 'gemma-4-26b-a4b-it';
-  const modelMaxLimit = modelMaxTokensMap[selectedModel] || 8192;
-  el.max = modelMaxLimit;
-  const val = parseInt(el.value, 10);
-  if (val > modelMaxLimit) {
-    el.value = modelMaxLimit;
-  }
-}
-
-function onModelChange() {
-  const select = document.getElementById('chat-model-select');
-  const selectedModel = select.value;
-  const customBox = document.getElementById('custom-endpoint-box');
-  const maxTokensInput = document.getElementById('chat-max-tokens');
-
-  if (selectedModel === 'custom') {
-    customBox.style.display = 'flex';
-  } else {
-    customBox.style.display = 'none';
-  }
-
-  const modelMaxLimit = modelMaxTokensMap[selectedModel] || 8192;
-  maxTokensInput.max = modelMaxLimit;
-  if (parseInt(maxTokensInput.value, 10) > modelMaxLimit) {
-    maxTokensInput.value = modelMaxLimit;
-  }
-}
-
-function clampMaxTurns(input) {
-  let val = parseInt(input.value, 10);
-  if (isNaN(val) || val < 1) val = 1;
-  if (val > 10) val = 10;
-  input.value = val;
-}
-
-function onSkillsModeChange() {
-  const select = document.getElementById('chat-skills-select');
-  const thresholdBox = document.getElementById('skill-threshold-box');
-  if (!select || !thresholdBox) return;
-  if (select.value === 'vector_store') {
-    thresholdBox.style.display = 'flex';
-  } else {
-    thresholdBox.style.display = 'none';
-  }
-}
-
-async function loadSkillsDropdown() {
-  const select = document.getElementById('chat-skills-select');
-  if (!select) return;
-  try {
-    const res = await fetch('/api/skills/list');
-    const json = await res.json();
-    if (json.status === 'success' && json.skills) {
-      select.innerHTML = `
-        <option value="vector_store" selected>Vector Store</option>
-        <option value="llm_selected">LLM Selected</option>
-      `;
-      json.skills.forEach(skill => {
-        const opt = document.createElement('option');
-        opt.value = skill.folder_name;
-        opt.textContent = skill.name;
-        select.appendChild(opt);
-      });
-    }
-  } catch (err) {
-    console.error('Failed to load skills dropdown:', err);
-  }
-}
-
-async function sendChatMessage() {
-  const input = document.getElementById('chat-input');
-  const query = input.value.trim();
-  if (!query) return;
-
-  const model = document.getElementById('chat-model-select').value;
-  const temperature = parseFloat(document.getElementById('chat-temperature').value) || 0.7;
-  const modelMaxLimit = modelMaxTokensMap[model] || 8192;
-  let maxTokens = parseInt(document.getElementById('chat-max-tokens').value, 10) || 2048;
-  if (maxTokens > modelMaxLimit) {
-    maxTokens = modelMaxLimit;
-    document.getElementById('chat-max-tokens').value = modelMaxLimit;
-  }
-  const maxRagChunks = parseInt(document.getElementById('rag-max-chunks').value, 10) || 5;
-  const customEndpoint = document.getElementById('chat-custom-endpoint').value;
-
-  const agentSelect = document.getElementById('chat-agent-select');
-  const agentType = agentSelect ? agentSelect.value : 'custom';
-
-  const maxTurnsInput = document.getElementById('chat-max-turns');
-  const maxTurns = maxTurnsInput ? Math.min(Math.max(1, parseInt(maxTurnsInput.value, 10) || 3), 10) : 3;
-  const skillsSelect = document.getElementById('chat-skills-select');
-  const skillsMode = skillsSelect ? skillsSelect.value : 'vector_store';
-  const skillThresholdInput = document.getElementById('chat-skill-threshold');
-  const skillThreshold = skillThresholdInput ? (parseFloat(skillThresholdInput.value) || 0.2) : 0.2;
-  const docThresholdInput = document.getElementById('doc-threshold');
-  const docThreshold = docThresholdInput ? (parseFloat(docThresholdInput.value) || 0.3) : 0.3;
-
-  // Use a new conversation ID for each question per specification
-  const questionConvId = `conv-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
-
-  // Append user bubble
-  appendChatMessage('user', query);
-  input.value = '';
-
-  // Show temporary loading indicator
-  const loadingBubble = appendChatMessage('agent', 'Thinking and retrieving evidence...');
-  const sendBtn = document.getElementById('btn-send-chat');
-  sendBtn.disabled = true;
-
-  try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query: query,
-        agent_type: agentType,
-        model: model,
-        temperature: temperature,
-        max_tokens: maxTokens,
-        max_rag_chunks: maxRagChunks,
-        custom_endpoint: customEndpoint,
-        conversation_id: questionConvId,
-        skills_mode: skillsMode,
-        skill_threshold: skillThreshold,
-        doc_threshold: docThreshold,
-        max_turns: maxTurns
-      })
-    });
-
-    const json = await res.json();
-    loadingBubble.remove();
-
-    if (json.status === 'success') {
-      const respData = json.data;
-      const tokensMeta = respData.tokens ? ` | Tokens: ${respData.tokens.input} in, ${respData.tokens.output} out` : '';
-
-      appendChatMessage(
-        'agent',
-        respData.response || respData.answer || '',
-        `Conv ID: ${respData.conversation_id} | Agent: ${respData.agent_type === 'google_adk' ? 'Google ADK LlmAgent' : 'Custom Agent'} | Model: ${respData.model_used || model}${tokensMeta} | Latency: ${respData.latency_ms}ms`,
-        respData.steps || []
-      );
-
-      // Render retrieved context evidence
-      renderRetrievedEvidence(respData.evidence || respData.retrieved_evidence || []);
-    } else {
-      appendChatMessage('agent', `Error: ${json.message}`);
-    }
-  } catch (err) {
-    loadingBubble.remove();
-    appendChatMessage('agent', `Network error: ${err.message}`);
-  } finally {
-    sendBtn.disabled = false;
-  }
-}
-
-function appendChatMessage(sender, text, metaText = '', steps = []) {
-  const history = document.getElementById('chat-history');
-  const msgDiv = document.createElement('div');
-  msgDiv.className = `chat-message ${sender}`;
-
-  const textDiv = document.createElement('div');
-  textDiv.className = 'message-content';
-  textDiv.textContent = text;
-  msgDiv.appendChild(textDiv);
-
-  // Add response logs box with Show Logs button, component bubbles, and collapsible step logs
-  if (steps && steps.length > 0) {
-    const box = document.createElement('div');
-    box.className = 'response-logs-box';
-
-    const header = document.createElement('div');
-    header.className = 'logs-box-header';
-
-    const bubblesRow = document.createElement('div');
-    bubblesRow.className = 'component-bubbles-row';
-
-    steps.forEach((step) => {
-      const bubble = document.createElement('div');
-      bubble.className = 'component-bubble';
-      bubble.innerHTML = `
-        <span class="bubble-icon">${escapeHtml(step.icon || '⚙️')}</span>
-        <span class="bubble-name">${escapeHtml(step.component || step.step_name)}</span>
-        <span class="bubble-time">⏱️ ${step.elapsed_ms}ms</span>
-      `;
-      bubblesRow.appendChild(bubble);
-    });
-
-    const toggleBtn = document.createElement('button');
-    toggleBtn.type = 'button';
-    toggleBtn.className = 'btn-show-logs';
-    toggleBtn.textContent = 'Show Logs';
-    toggleBtn.onclick = function() { toggleShowLogs(this); };
-
-    header.appendChild(bubblesRow);
-    header.appendChild(toggleBtn);
-    box.appendChild(header);
-
-    // Collapsible container to expand and show full content of the step including logs
-    const collapsible = document.createElement('div');
-    collapsible.className = 'logs-collapsible-content';
-    collapsible.style.display = 'none';
-
-    steps.forEach((step) => {
-      const stepCard = document.createElement('div');
-      stepCard.className = 'step-detail-bubble';
-
-      let logsHtml = '';
-      if (step.logs && step.logs.length > 0) {
-        logsHtml = step.logs.map(log => `
-          <div class="step-log-item">
-            <div class="log-meta">
-              <span class="evidence-badge" style="font-size: 0.7rem; padding: 1px 5px;">[${escapeHtml(log.call_type || 'event')}]</span>
-              <strong>${escapeHtml(log.event_type || '')}</strong>:
-              <span>${escapeHtml(log.invoker || '')} ➔ ${escapeHtml(log.recipient || log.target || '')}</span>
-              <span style="color: var(--text-muted); font-size: 0.72rem;">(${escapeHtml(log.timestamp ? log.timestamp.split('T')[1].slice(0, 8) : '')})</span>
-            </div>
-            <div class="log-desc">${escapeHtml(log.description || '')}</div>
-            <pre class="log-payload-json">${escapeHtml(JSON.stringify(log.payload, null, 2))}</pre>
-          </div>
-        `).join('');
-      } else {
-        logsHtml = `<div style="color: var(--text-muted); font-size: 0.8rem; padding: 4px;">No detailed log records captured for this step.</div>`;
+      // Lazy load view data
+      if (targetId === 'page-ingest') {
+        loadIngestionData();
+      } else if (targetId === 'page-telemetry') {
+        loadTelemetryData();
+      } else if (targetId === 'page-audit') {
+        loadAuditLogs();
       }
-
-      stepCard.innerHTML = `
-        <div class="step-detail-header">
-          <div class="step-detail-title">
-            <span class="step-detail-icon">${escapeHtml(step.icon || '⚙️')}</span>
-            <strong>${escapeHtml(step.component || step.step_name)}</strong>
-          </div>
-          <span class="step-detail-time">⏱️ ${step.elapsed_ms}ms</span>
-        </div>
-        <div class="step-bubble-scroll-area">
-          <div class="step-summary"><strong>Summary:</strong> ${escapeHtml(step.summary || '')}</div>
-          <div class="step-logs-wrapper">
-            <div class="step-logs-header">📋 Step Logs &amp; Payloads:</div>
-            ${logsHtml}
-          </div>
-        </div>
-      `;
-      collapsible.appendChild(stepCard);
     });
-
-    box.appendChild(collapsible);
-    msgDiv.appendChild(box);
-  }
-
-  if (metaText) {
-    const metaDiv = document.createElement('div');
-    metaDiv.className = 'meta';
-    metaDiv.textContent = metaText;
-    msgDiv.appendChild(metaDiv);
-  }
-
-  history.appendChild(msgDiv);
-  history.scrollTop = history.scrollHeight;
-  return msgDiv;
-}
-
-function toggleShowLogs(btn) {
-  const box = btn.closest('.response-logs-box');
-  if (!box) return;
-  const content = box.querySelector('.logs-collapsible-content');
-  if (!content) return;
-  const isHidden = content.style.display === 'none';
-  content.style.display = isHidden ? 'flex' : 'none';
-  btn.textContent = isHidden ? 'Hide Logs' : 'Show Logs';
-  btn.classList.toggle('active', isHidden);
-}
-
-function renderRetrievedEvidence(evidenceList) {
-  const container = document.getElementById('evidence-container');
-  container.innerHTML = '';
-
-  if (!evidenceList || evidenceList.length === 0) {
-    container.innerHTML = '<div style="color: var(--text-muted); font-size: 0.88rem; padding: 8px;">No relevant context chunks or skills matched above threshold.</div>';
-    return;
-  }
-
-  // Group all results by the document per SPECIFICATION.md:
-  // "Display the contents of the information retrieved from the vector store.
-  //  - Include results from the skills vector store and the documents vector store.
-  //  - Group the results by the documents"
-  const groups = {};
-  evidenceList.forEach(item => {
-    let docName = item.document_name || item.details?.document_name;
-    if (!docName) {
-      if (item.title && item.title.startsWith('Doc: ')) {
-        docName = item.title.replace('Doc: ', '').split(' (')[0];
-      } else if (item.title && item.title.startsWith('Skill: ')) {
-        const sName = item.title.replace('Skill: ', '').split(' (')[0];
-        docName = `${item.details?.folder_name || sName}/SKILL.md`;
-      } else if (item.details?.folder_name) {
-        docName = `${item.details.folder_name}/SKILL.md`;
-      } else if (item.details?.name) {
-        docName = `${item.details.name}/SKILL.md`;
-      } else {
-        docName = item.details?.source || 'Context Document';
-      }
-    }
-
-    if (!groups[docName]) groups[docName] = [];
-    groups[docName].push(item);
   });
 
-  for (const [docName, items] of Object.entries(groups)) {
-    const groupHeader = document.createElement('div');
-    groupHeader.className = 'evidence-group-title';
-    groupHeader.textContent = `▶ Document: ${docName} (${items.length} ${items.length === 1 ? 'item' : 'items'})`;
-    container.appendChild(groupHeader);
+  // ---------------------------------------------------------------------------
+  // System Health Monitoring
+  // ---------------------------------------------------------------------------
+  async function checkHealth() {
+    try {
+      const res = await fetch('/api/health');
+      if (!res.ok) throw new Error('Health check failed');
+      const data = await res.json();
+      
+      const s = data.services || {};
+      tooltipAgent.textContent = s.agent || 'Unknown';
+      tooltipOllama.textContent = `${s.ollama || 'Offline'} (${s.ollama_active_model || 'bge-m3'})`;
+      tooltipEmbedder.textContent = s.ollama_active_model || 'bge-m3';
+      tooltipVector.textContent = s.vector_store || 'Disconnected';
+      tooltipLlm.textContent = s.llm_provider || 'Not Configured';
 
-    items.forEach(ev => {
-      const card = document.createElement('div');
-      card.className = 'evidence-card';
+      if (data.status === 'Online') {
+        statusDot.className = 'status-dot online';
+        statusSummary.textContent = `Agent: Online (${s.ollama_active_model || 'bge-m3'})`;
+      } else if (data.status === 'Degraded') {
+        statusDot.className = 'status-dot degraded';
+        statusSummary.textContent = 'Agent: Degraded';
+      } else {
+        statusDot.className = 'status-dot offline';
+        statusSummary.textContent = `Agent: ${data.status}`;
+      }
+    } catch (e) {
+      statusDot.className = 'status-dot offline';
+      statusSummary.textContent = 'Agent: Offline';
+    }
+  }
 
-      const isSkillStore = ev.source_type === 'skill_vector_store' || ev.store === 'skills' || (ev.step && ev.step.toLowerCase().includes('skill'));
-      const storeLabel = isSkillStore ? 'Skills Vector Store' : 'Documents Vector Store';
-      const storeBadgeStyle = isSkillStore
-        ? 'background: rgba(139, 92, 246, 0.2); color: #c4b5fd;'
-        : 'background: rgba(16, 185, 129, 0.15); color: #34d399;';
+  // Periodic health check every 5 seconds
+  checkHealth();
+  setInterval(checkHealth, 5000);
 
-      const scoreText = (ev.score !== undefined && ev.score !== null)
-        ? `Score: ${typeof ev.score === 'number' ? ev.score.toFixed(3) : ev.score}`
-        : '';
+  // ---------------------------------------------------------------------------
+  // Shutdown Confirmation Flow
+  // ---------------------------------------------------------------------------
+  btnShutdown.addEventListener('click', () => {
+    shutdownConfirmInput.value = '';
+    btnConfirmShutdown.disabled = true;
+    shutdownModal.classList.remove('hidden');
+    shutdownConfirmInput.focus();
+  });
 
-      card.innerHTML = `
-        <div class="evidence-header">
-          <strong>${escapeHtml(ev.title || 'Evidence Chunk')}</strong>
-          <div style="display: flex; gap: 6px; align-items: center;">
-            <span class="evidence-badge" style="${storeBadgeStyle} font-size: 0.72rem;">${storeLabel}</span>
-            ${scoreText ? `<span class="evidence-badge">${scoreText}</span>` : ''}
+  shutdownConfirmInput.addEventListener('input', () => {
+    btnConfirmShutdown.disabled = (shutdownConfirmInput.value.trim() !== 'Shutdown the service');
+  });
+
+  btnCancelShutdown.addEventListener('click', () => {
+    shutdownModal.classList.add('hidden');
+  });
+
+  btnConfirmShutdown.addEventListener('click', async () => {
+    btnConfirmShutdown.disabled = true;
+    btnConfirmShutdown.textContent = 'Shutting down...';
+    try {
+      await fetch('/api/shutdown', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmation: 'Shutdown the service' }),
+      });
+      document.body.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#0a0e17;color:#f1f5f9;font-family:sans-serif;">
+          <h2 style="margin-bottom:1rem;color:#f87171;">Application & Services Terminated</h2>
+          <p style="color:#94a3b8;">All services started by Agent-with-RAG have been safely shut down. You may close this tab.</p>
+        </div>
+      `;
+    } catch (e) {
+      alert('Shutdown initiated.');
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Page 1: Chat Initialization & Logic
+  // ---------------------------------------------------------------------------
+  async function loadModelsAndSkills() {
+    try {
+      // 1. Fetch LLM models
+      const mRes = await fetch('/api/models');
+      if (mRes.ok) {
+        const mData = await mRes.json();
+        availableModelsData = mData.models || [];
+        chatModel.innerHTML = '';
+
+        availableModelsData.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.id;
+          opt.textContent = `${m.id} (Max tokens: ${m.output_token_limit})`;
+          if (m.id === mData.default_model) {
+            opt.selected = true;
+          }
+          chatModel.appendChild(opt);
+        });
+
+        // Add Custom Model option
+        const customOpt = document.createElement('option');
+        customOpt.value = 'Custom Model';
+        customOpt.textContent = 'Custom Model (HTTP Endpoint)';
+        chatModel.appendChild(customOpt);
+
+        updateTokenConstraints();
+      }
+
+      // 2. Fetch Skills
+      const sRes = await fetch('/api/skills');
+      if (sRes.ok) {
+        const sData = await sRes.json();
+        const skillsList = sData.skills || [];
+        
+        // Reset skills dropdown options preserving Vector Store Selects and LLM Selects
+        chatSkills.innerHTML = `
+          <option value="Vector Store Selects" selected>Vector Store Selects (Default)</option>
+          <option value="LLM Selects">LLM Selects</option>
+        `;
+        skillsList.forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.name;
+          opt.textContent = `Skill: ${s.name}`;
+          chatSkills.appendChild(opt);
+        });
+      }
+    } catch (e) {
+      console.error('Failed to load models or skills:', e);
+    }
+  }
+
+  function updateTokenConstraints() {
+    const selected = chatModel.value;
+    if (selected === 'Custom Model') {
+      customEndpointBox.classList.remove('hidden');
+      chatMaxTokens.max = 32768;
+    } else {
+      customEndpointBox.classList.add('hidden');
+      const found = availableModelsData.find(m => m.id === selected);
+      if (found) {
+        chatMaxTokens.max = found.output_token_limit;
+        if (parseInt(chatMaxTokens.value) > found.output_token_limit) {
+          chatMaxTokens.value = found.output_token_limit;
+        }
+      }
+    }
+  }
+
+  chatModel.addEventListener('change', updateTokenConstraints);
+
+  // Skill mode selection handler
+  chatSkills.addEventListener('change', () => {
+    if (chatSkills.value === 'Vector Store Selects' || chatSkills.value === 'Vector Store') {
+      skillThresholdBox.classList.remove('hidden');
+    } else {
+      skillThresholdBox.classList.add('hidden');
+    }
+  });
+
+  // Quick prompt chips
+  document.querySelectorAll('.btn-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      chatInput.value = btn.getAttribute('data-prompt');
+      chatInput.focus();
+    });
+  });
+
+  // Chat message sending
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  btnSendMessage.addEventListener('click', sendMessage);
+
+  async function sendMessage() {
+    const text = chatInput.value.trim();
+    if (!text) return;
+
+    chatInput.value = '';
+    const welcome = chatMessages.querySelector('.chat-welcome');
+    if (welcome) welcome.remove();
+
+    // 1. Append User Message Bubble
+    appendUserMessage(text);
+
+    // 2. Append Pending Agent Bubble
+    const pendingAgentBubble = appendPendingAgentBubble();
+    btnSendMessage.disabled = true;
+
+    try {
+      const payload = {
+        message: text,
+        agent: agentChoice.value,
+        model: chatModel.value,
+        temperature: parseFloat(chatTemperature.value) || 0.7,
+        max_tokens: parseInt(chatMaxTokens.value) || 4096,
+        max_turns: parseInt(chatMaxTurns.value) || 3,
+        rag_chunks: parseInt(chatRagChunks.value) || 5,
+        skill_mode: chatSkills.value,
+        skill_threshold: parseFloat(chatSkillThreshold.value) || 0.2,
+        doc_threshold: parseFloat(docThresholdInput.value) || 0.3,
+        custom_endpoint: customEndpoint.value.trim(),
+      };
+
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Server error processing message.');
+
+      // Update pending bubble with full response and detail box
+      updateAgentBubble(pendingAgentBubble, data);
+
+      // Render retrieved context evidence in Right Card
+      renderEvidence(data.retrieved_evidence || {});
+
+    } catch (err) {
+      pendingAgentBubble.querySelector('.message-bubble').textContent = `Error: ${err.message}`;
+      pendingAgentBubble.querySelector('.message-bubble').style.borderColor = 'rgba(239, 68, 68, 0.4)';
+    } finally {
+      btnSendMessage.disabled = false;
+      chatInput.focus();
+    }
+  }
+
+  function appendUserMessage(text) {
+    const row = document.createElement('div');
+    row.className = 'message-row user';
+    row.innerHTML = `<div class="message-bubble">${escapeHtml(text)}</div>`;
+    chatMessages.appendChild(row);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function appendPendingAgentBubble() {
+    const row = document.createElement('div');
+    row.className = 'message-row agent';
+    row.innerHTML = `
+      <div class="message-bubble" style="color:var(--text-muted);">
+        <span class="spinner-icon">⏳</span> Reasoning and executing tools...
+      </div>
+    `;
+    chatMessages.appendChild(row);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return row;
+  }
+
+  function updateAgentBubble(row, data) {
+    const bubble = row.querySelector('.message-bubble');
+    bubble.innerHTML = formatMarkdownText(data.response || '(No response text)');
+
+    // Create Detail Box with anchored "Show Logs" button
+    const detailBox = document.createElement('div');
+    detailBox.className = 'agent-detail-box';
+
+    const steps = data.steps || [];
+    let bubblesHtml = '';
+
+    steps.forEach(st => {
+      const compClass = (st.component || 'agent').toLowerCase();
+      bubblesHtml += `
+        <div class="step-bubble ${compClass}" title="${escapeHtml(st.title)}">
+          <span>${st.icon || '🔹'}</span>
+          <span>${escapeHtml(st.component)}</span>
+          <span class="elapsed">${st.elapsed_ms || 0}ms</span>
+        </div>
+      `;
+    });
+
+    let logsHtml = '';
+    steps.forEach(st => {
+      logsHtml += `
+        <div class="step-log-item">
+          <strong>${st.icon || '🔹'} [${escapeHtml(st.component)}] ${escapeHtml(st.title)}</strong> (${st.elapsed_ms || 0}ms)<br>
+          <span style="color:var(--text-muted);">${escapeHtml(st.summary || '')}</span>
+          <pre style="margin-top:4px;white-space:pre-wrap;color:#93c5fd;">${escapeHtml(st.logs || '')}</pre>
+        </div>
+      `;
+    });
+
+    detailBox.innerHTML = `
+      <div class="detail-box-header">
+        <div class="component-bubbles-row">${bubblesHtml}</div>
+        <button class="btn-show-logs">Show Logs</button>
+      </div>
+      <div class="detail-box-content">${logsHtml || '<p>No intermediate step logs recorded.</p>'}</div>
+    `;
+
+    // Toggle expand / collapse on click
+    const btnShowLogs = detailBox.querySelector('.btn-show-logs');
+    const detailContent = detailBox.querySelector('.detail-box-content');
+
+    btnShowLogs.addEventListener('click', () => {
+      const isExpanded = detailContent.classList.contains('expanded');
+      if (isExpanded) {
+        detailContent.classList.remove('expanded');
+        btnShowLogs.textContent = 'Show Logs';
+      } else {
+        detailContent.classList.add('expanded');
+        btnShowLogs.textContent = 'Hide Logs';
+      }
+    });
+
+    row.appendChild(detailBox);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function renderEvidence(evidence) {
+    const skills = evidence.skills || [];
+    const docs = evidence.documents || [];
+
+    if (skills.length === 0 && docs.length === 0) {
+      evidenceContainer.innerHTML = `
+        <div class="empty-placeholder">
+          <span class="empty-icon">📂</span>
+          <p>No vector store context retrieved for this conversation.</p>
+        </div>
+      `;
+      return;
+    }
+
+    let html = '';
+
+    // Render Skills evidence
+    if (skills.length > 0) {
+      html += `
+        <div class="evidence-doc-group">
+          <div class="evidence-doc-header">
+            <div class="evidence-doc-title"><span>⚡</span> Skills Vector Store Matches</div>
+            <span class="similarity-badge">${skills.length} matched</span>
+          </div>
+          <div class="evidence-doc-body">
+            ${skills.map(s => `
+              <div class="evidence-chunk-item">
+                <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+                  <strong style="color:#fde047;">${escapeHtml(s.name)}</strong>
+                  <span style="color:var(--text-muted);font-size:0.75rem;">Score: ${s.similarity}</span>
+                </div>
+                <div style="color:var(--text-secondary);font-size:0.75rem;">${escapeHtml(s.description || '')}</div>
+              </div>
+            `).join('')}
           </div>
         </div>
-        <div class="evidence-body">${escapeHtml(ev.content || '')}</div>
       `;
-      container.appendChild(card);
-    });
-  }
-}
+    }
 
-function clearEvidenceView() {
-  document.getElementById('evidence-container').innerHTML =
-    '<div style="color: var(--text-muted); font-size: 0.9rem; margin-top: 12px;">Evidence view cleared. Subsequent chat inquiries will populate here.</div>';
-}
-
-// ----------------- PAGE 2: Vector DB Ingestion -----------------
-async function loadIngestData() {
-  loadVectorStorageStatus();
-  loadOllamaEmbeddingCatalog();
-}
-
-async function loadVectorStorageStatus() {
-  try {
-    const res = await fetch('/api/vector/status');
-    const data = await res.json();
-
-    document.getElementById('stat-chunks-count').textContent = data.total_chunks || 0;
-    document.getElementById('stat-docs-count').textContent = data.total_documents || 0;
-    document.getElementById('stat-db-size').textContent = `${data.db_size_mb || 0} MB`;
-
-    const spinner = document.getElementById('ingest-progress-spinner');
-    spinner.style.display = data.is_ingesting ? 'inline' : 'none';
-
-    // Populate Ingested Docs Table
-    const tbody = document.getElementById('ingested-docs-tbody');
-    tbody.innerHTML = '';
-    const docs = data.documents || [];
-
-    if (docs.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No documents ingested yet.</td></tr>';
-    } else {
-      docs.forEach(d => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td><strong>${escapeHtml(d.name)}</strong></td>
-          <td>${d.chunks_count}</td>
-          <td>${d.total_characters.toLocaleString()}</td>
-          <td style="text-align: right;">
-            <button class="btn-danger btn-sm" style="padding: 4px 10px; font-size: 0.8rem;" onclick="deleteDocument('${escapeHtml(d.name)}')">Delete</button>
-          </td>
+    // Render Documents evidence grouped by document
+    if (docs.length > 0) {
+      docs.forEach(doc => {
+        const chunks = doc.chunks || [];
+        html += `
+          <div class="evidence-doc-group">
+            <div class="evidence-doc-header">
+              <div class="evidence-doc-title"><span>📄</span> ${escapeHtml(doc.doc_name)}</div>
+              <span class="similarity-badge">Top Match: ${doc.highest_similarity}</span>
+            </div>
+            <div class="evidence-doc-body">
+              ${chunks.map(ch => `
+                <div class="evidence-chunk-item">
+                  <div style="display:flex;justify-content:space-between;margin-bottom:3px;font-size:0.72rem;color:var(--text-muted);">
+                    <span>Chunk #${ch.index || 0}</span>
+                    <span>Similarity: ${ch.similarity}</span>
+                  </div>
+                  <div>${escapeHtml(ch.text)}</div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
         `;
-        tbody.appendChild(tr);
       });
     }
-  } catch (e) {
-    console.error('Error fetching vector status:', e);
+
+    evidenceContainer.innerHTML = html;
   }
-}
 
-async function loadOllamaEmbeddingCatalog() {
-  try {
-    const res = await fetch('/api/ollama/models');
-    const data = await res.json();
-    currentEmbeddingModel = data.current_model || '';
+  // ---------------------------------------------------------------------------
+  // Page 2: Ingestion Logic
+  // ---------------------------------------------------------------------------
+  async function loadIngestionData() {
+    try {
+      // 1. Stats
+      const sRes = await fetch('/api/vectordb/stats');
+      if (sRes.ok) {
+        const sData = await sRes.json();
+        statChunksCount.textContent = sData.total_chunks || 0;
+        statDocsCount.textContent = sData.total_documents || 0;
+        statDbSize.textContent = sData.db_size_mb || '0.0';
+        activeEmbedderModel = sData.active_model || 'bge-m3';
+      }
 
-    const select = document.getElementById('embedder-select');
-    select.innerHTML = '';
+      // 2. Ingested Docs
+      const dRes = await fetch('/api/vectordb/documents');
+      if (dRes.ok) {
+        const dData = await dRes.json();
+        const docs = dData.documents || [];
+        if (docs.length === 0) {
+          ingestedDocsTbody.innerHTML = `<tr><td colspan="4" class="text-center text-muted">No documents ingested.</td></tr>`;
+        } else {
+          ingestedDocsTbody.innerHTML = docs.map(d => `
+            <tr>
+              <td><strong>${escapeHtml(d.doc_name)}</strong></td>
+              <td>${d.chunk_count}</td>
+              <td>${d.total_chars.toLocaleString()}</td>
+              <td>
+                <button class="btn-table-delete" data-doc="${escapeHtml(d.doc_name)}">Delete</button>
+              </td>
+            </tr>
+          `).join('');
 
-    const tbody = document.getElementById('embedding-catalog-tbody');
-    tbody.innerHTML = '';
+          // Bind delete buttons
+          ingestedDocsTbody.querySelectorAll('.btn-table-delete').forEach(btn => {
+            btn.addEventListener('click', async () => {
+              const docName = btn.getAttribute('data-doc');
+              if (confirm(`Delete document '${docName}' from vector store?`)) {
+                await fetch(`/api/vectordb/document?doc_name=${encodeURIComponent(docName)}`, { method: 'DELETE' });
+                loadIngestionData();
+              }
+            });
+          });
+        }
+      }
 
-    (data.models || []).forEach(m => {
-      // Populate Dropdown
-      const opt = document.createElement('option');
-      opt.value = m.name;
-      opt.textContent = `${m.name} ${m.is_active ? '(Active)' : ''}`;
-      if (m.is_active) opt.selected = true;
-      select.appendChild(opt);
+      // 3. Models
+      const mRes = await fetch('/api/vectordb/models');
+      if (mRes.ok) {
+        const mData = await mRes.json();
+        const models = mData.models || [];
+        
+        // Update Embedder Select dropdown
+        embedderSelect.innerHTML = '';
+        models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.name;
+          opt.textContent = `${m.name} (${m.status})`;
+          if (m.is_active) opt.selected = true;
+          embedderSelect.appendChild(opt);
+        });
 
-      // Populate Catalog Table
-      const tr = document.createElement('tr');
-      let badgeClass = 'badge-pull';
-      if (m.status === 'Active') badgeClass = 'badge-active';
-      else if (m.status === 'Installed') badgeClass = 'badge-installed';
-
-      tr.innerHTML = `
-        <td><strong>${escapeHtml(m.name)}</strong></td>
-        <td>${m.dimensions}</td>
-        <td>${m.context_window}</td>
-        <td>${m.size}</td>
-        <td style="color: var(--text-secondary);">${escapeHtml(m.description || '')}</td>
-        <td><span class="${badgeClass}">${m.status}</span></td>
-      `;
-      tbody.appendChild(tr);
-    });
-  } catch (e) {
-    console.error('Error loading embedding catalog:', e);
-  }
-}
-
-function onEmbedderSelectChange(newModel) {
-  if (newModel === currentEmbeddingModel) return;
-  targetEmbeddingModelToSwitch = newModel;
-
-  // Open stern warning modal
-  document.getElementById('model-switch-confirm-input').value = '';
-  document.getElementById('btn-confirm-switch-model').disabled = true;
-  openModal('modal-switch-model');
-}
-
-function cancelModelSwitch() {
-  closeModal('modal-switch-model');
-  // Revert select dropdown to active model
-  document.getElementById('embedder-select').value = currentEmbeddingModel;
-}
-
-function validateModelSwitchConfirm(val) {
-  const btn = document.getElementById('btn-confirm-switch-model');
-  btn.disabled = (val.trim() !== 'Delete Data and Switch');
-}
-
-async function executeModelSwitch() {
-  closeModal('modal-switch-model');
-  const btn = document.getElementById('btn-confirm-switch-model');
-  btn.disabled = true;
-
-  try {
-    const res = await fetch('/api/ollama/switch-model', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: targetEmbeddingModelToSwitch,
-        confirm_text: 'Delete Data and Switch'
-      })
-    });
-    const data = await res.json();
-    if (data.status === 'success') {
-      alert(`Model switched to ${targetEmbeddingModelToSwitch}. Skills database re-indexed.`);
-      loadIngestData();
-    } else {
-      alert(`Switch failed: ${data.message}`);
+        // Update Models Table
+        availableModelsTbody.innerHTML = models.map(m => `
+          <tr>
+            <td><strong>${escapeHtml(m.name)}</strong></td>
+            <td>${m.dimensions}</td>
+            <td>${m.context_window}</td>
+            <td>${escapeHtml(m.size)}</td>
+            <td>${escapeHtml(m.description)}</td>
+            <td>
+              <span class="status-badge ${m.is_active ? 'active' : (m.is_installed ? 'installed' : 'available')}">
+                ${m.status}
+              </span>
+            </td>
+          </tr>
+        `).join('');
+      }
+    } catch (e) {
+      console.error('Failed to load ingestion data:', e);
     }
-  } catch (e) {
-    alert(`Error: ${e.message}`);
-  }
-}
-
-function toggleIngestInputMode() {
-  const mode = document.getElementById('ingest-source-type').value;
-  const input = document.getElementById('ingest-target-input');
-  if (mode === 'url') {
-    input.placeholder = 'https://en.wikipedia.org/wiki/Artificial_intelligence';
-  } else {
-    input.placeholder = 'sample_docs or /path/to/documents';
-  }
-}
-
-function setIngestUrl(url) {
-  const input = document.getElementById('ingest-target-input');
-  const typeSelect = document.getElementById('ingest-source-type');
-  input.value = url;
-  if (url.startsWith('http')) {
-    typeSelect.value = 'url';
-  } else {
-    typeSelect.value = 'local';
-  }
-}
-
-function toggleAdvancedChunking() {
-  const card = document.getElementById('advanced-chunking-card');
-  const icon = document.getElementById('advanced-toggle-icon');
-  if (card.classList.contains('show')) {
-    card.classList.remove('show');
-    icon.textContent = '▶';
-  } else {
-    card.classList.add('show');
-    icon.textContent = '▼';
-  }
-}
-
-async function populateVectorDatabase() {
-  const target = document.getElementById('ingest-target-input').value.trim();
-  const type = document.getElementById('ingest-source-type').value;
-  const chunkSize = parseInt(document.getElementById('chunk-size-input').value, 10) || 500;
-  const overlap = parseInt(document.getElementById('chunk-overlap-input').value, 10) || 100;
-
-  if (!target) {
-    alert('Please specify a URL or local directory/file path to ingest.');
-    return;
   }
 
-  const btn = document.getElementById('btn-populate-db');
-  btn.disabled = true;
-  btn.textContent = 'Ingesting & Vectorizing...';
-
-  try {
-    const res = await fetch('/api/ingest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        target: target,
-        type: type,
-        chunk_size: chunkSize,
-        overlap: overlap
-      })
+  // Sample URLs click
+  document.querySelectorAll('.btn-sample-url').forEach(btn => {
+    btn.addEventListener('click', () => {
+      ingestSourceInput.value = btn.getAttribute('data-url');
+      ingestSourceInput.focus();
     });
-    const data = await res.json();
-    if (data.status === 'success') {
-      alert(`Ingestion Successful! Added ${data.added_chunks} new non-duplicated chunks (${data.total_characters} characters).`);
-      loadVectorStorageStatus();
-    } else {
-      alert(`Ingestion Failed: ${data.message}`);
+  });
+
+  // Collapsible toggle
+  btnToggleChunking.addEventListener('click', () => {
+    chunkingContent.classList.toggle('hidden');
+    const arrow = btnToggleChunking.querySelector('.collapsible-arrow');
+    arrow.textContent = chunkingContent.classList.contains('hidden') ? '▼' : '▲';
+  });
+
+  // Populate DB Button
+  btnPopulateDb.addEventListener('click', async () => {
+    const source = ingestSourceInput.value.trim();
+    if (!source) {
+      alert('Please enter a URL or local path.');
+      return;
     }
-  } catch (e) {
-    alert(`Ingestion error: ${e.message}`);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Populate Vector Database';
-  }
-}
 
-async function resetDatabase() {
-  if (!confirm('Are you sure you want to reset the document vector database? All document chunks will be deleted.')) {
-    return;
-  }
-  try {
-    const res = await fetch('/api/vector/reset', { method: 'POST' });
-    const data = await res.json();
-    alert(data.message || 'Database reset.');
-    loadVectorStorageStatus();
-  } catch (e) {
-    alert(`Reset error: ${e.message}`);
-  }
-}
+    btnPopulateDb.disabled = true;
+    ingestSpinner.classList.remove('hidden');
+    storageStatusBanner.innerHTML = '<span class="status-indicator-busy">⏳ Ingestion in progress...</span>';
 
-async function deleteDocument(docName) {
-  if (!confirm(`Are you sure you want to delete document "${docName}" from the database? All its chunks will be deleted.`)) {
-    return;
-  }
-  try {
-    const res = await fetch('/api/vector/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ document_name: docName })
-    });
-    const data = await res.json();
-    if (data.status === 'success') {
-      loadVectorStorageStatus();
-    } else {
-      alert(`Failed to delete document: ${data.message || 'Unknown error'}`);
+    try {
+      const res = await fetch('/api/vectordb/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source: source,
+          chunk_size: parseInt(inputChunkSize.value) || 1000,
+          chunk_overlap: parseInt(inputChunkOverlap.value) || 200,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Ingestion failed');
+
+      alert(data.message || 'Ingestion complete!');
+      ingestSourceInput.value = '';
+      loadIngestionData();
+    } catch (err) {
+      alert(`Ingestion error: ${err.message}`);
+    } finally {
+      btnPopulateDb.disabled = false;
+      ingestSpinner.classList.add('hidden');
+      storageStatusBanner.innerHTML = '<span class="status-indicator-idle">Idle (Ready)</span>';
     }
-  } catch (e) {
-    alert(`Error deleting document: ${e.message}`);
-  }
-}
+  });
 
-async function updateSkillsDatabase() {
-  const btn = document.getElementById('btn-update-skills');
-  btn.disabled = true;
-  btn.textContent = 'Scanning skills/...';
+  // Reset DB Button
+  btnResetDb.addEventListener('click', async () => {
+    if (confirm('Are you sure you want to reset the document vector database? All ingested chunks will be removed.')) {
+      await fetch('/api/vectordb/reset', { method: 'POST' });
+      loadIngestionData();
+    }
+  });
 
-  try {
-    const res = await fetch('/api/skills/update', { method: 'POST' });
-    const data = await res.json();
-    const info = data.data || {};
-    alert(`Skills Database Updated! Newly loaded: ${info.loaded_skills?.length || 0}, Skipped existing: ${info.skipped_skills?.length || 0}`);
-  } catch (e) {
-    alert(`Error updating skills: ${e.message}`);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '⚡ Update Skills Database';
-  }
-}
+  // Update Skills Database Button
+  btnUpdateSkills.addEventListener('click', async () => {
+    btnUpdateSkills.disabled = true;
+    btnUpdateSkills.textContent = 'Updating...';
+    try {
+      const res = await fetch('/api/skills/update', { method: 'POST' });
+      const data = await res.json();
+      alert(data.message || 'Skills updated!');
+      loadIngestionData();
+      loadModelsAndSkills();
+    } catch (e) {
+      alert('Failed to update skills.');
+    } finally {
+      btnUpdateSkills.disabled = false;
+      btnUpdateSkills.innerHTML = '<span class="icon">🔄</span> Update Skills Database';
+    }
+  });
 
-// ----------------- PAGE 3: Telemetry -----------------
-function onTimeRangeChange() {
-  const range = document.getElementById('chart-timerange').value;
-  const customBox = document.getElementById('custom-date-range-box');
-  if (range === 'Custom') {
-    customBox.style.display = 'flex';
-  } else {
-    customBox.style.display = 'none';
-  }
-  fetchTelemetryData();
-}
+  // Change Embedder Model Dropdown with Stern Warning
+  embedderSelect.addEventListener('change', () => {
+    const targetModel = embedderSelect.value;
+    if (targetModel === activeEmbedderModel) return;
 
-async function fetchTelemetryData() {
-  const modelFilter = document.getElementById('telemetry-model-filter').value;
-  const interval = document.getElementById('chart-interval').value;
-  const timeRange = document.getElementById('chart-timerange').value;
-  const customStart = document.getElementById('custom-start-date').value;
-  const customEnd = document.getElementById('custom-end-date').value;
+    pendingModelSwitch = targetModel;
+    modalTargetModelName.textContent = targetModel;
+    changeModelConfirmInput.value = '';
+    btnConfirmChangeModel.disabled = true;
+    changeModelModal.classList.remove('hidden');
+    changeModelConfirmInput.focus();
+  });
 
-  let url = `/api/telemetry?model=${encodeURIComponent(modelFilter)}&interval=${encodeURIComponent(interval)}&time_range=${encodeURIComponent(timeRange)}`;
-  if (timeRange === 'Custom' && customStart && customEnd) {
-    url += `&custom_start=${encodeURIComponent(customStart)}&custom_end=${encodeURIComponent(customEnd)}`;
-  }
+  changeModelConfirmInput.addEventListener('input', () => {
+    btnConfirmChangeModel.disabled = (changeModelConfirmInput.value.trim() !== 'Change model and delete data');
+  });
 
-  try {
-    const res = await fetch(url);
-    const data = await res.json();
+  btnCancelChangeModel.addEventListener('click', () => {
+    changeModelModal.classList.add('hidden');
+    embedderSelect.value = activeEmbedderModel;
+    pendingModelSwitch = null;
+  });
 
-    // Update Model Filter options
-    const modelSelect = document.getElementById('telemetry-model-filter');
-    const existingModels = new Set(Array.from(modelSelect.options).map(o => o.value));
-    (data.models_used || []).forEach(m => {
-      if (!existingModels.has(m)) {
+  btnConfirmChangeModel.addEventListener('click', async () => {
+    if (!pendingModelSwitch) return;
+    btnConfirmChangeModel.disabled = true;
+    btnConfirmChangeModel.textContent = 'Switching...';
+
+    try {
+      const res = await fetch('/api/vectordb/change-model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: pendingModelSwitch,
+          confirmation: 'Change model and delete data',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to change embedder model');
+
+      alert(data.message || 'Embedder model switched successfully!');
+      activeEmbedderModel = data.active_model;
+      changeModelModal.classList.add('hidden');
+      loadIngestionData();
+      checkHealth();
+    } catch (e) {
+      alert(`Error: ${e.message}`);
+      embedderSelect.value = activeEmbedderModel;
+    } finally {
+      btnConfirmChangeModel.disabled = false;
+      btnConfirmChangeModel.textContent = 'Delete Data';
+      pendingModelSwitch = null;
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Page 3: Telemetry & Charts
+  // ---------------------------------------------------------------------------
+  async function loadTelemetryData() {
+    try {
+      const params = new URLSearchParams({
+        model: telemetryModelFilter.value,
+        interval: telIntervalSelect.value,
+        time_range: telRangeSelect.value,
+      });
+
+      if (telRangeSelect.value === 'Custom' && telStartDate.value && telEndDate.value) {
+        params.append('start_date', telStartDate.value);
+        params.append('end_date', telEndDate.value);
+      }
+
+      const res = await fetch(`/api/telemetry?${params.toString()}`);
+      if (!res.ok) throw new Error('Failed to fetch telemetry data');
+      const data = await res.json();
+
+      // 1. Update Used Models Dropdown
+      const usedModels = data.used_models || [];
+      const currentSelected = telemetryModelFilter.value;
+      telemetryModelFilter.innerHTML = '<option value="All Models">All Models</option>';
+      usedModels.forEach(m => {
         const opt = document.createElement('option');
         opt.value = m;
         opt.textContent = m;
-        modelSelect.appendChild(opt);
-      }
-    });
+        if (m === currentSelected) opt.selected = true;
+        telemetryModelFilter.appendChild(opt);
+      });
 
-    // Update KPI Tiles
-    const totals = data.totals || {};
-    document.getElementById('kpi-total-prompts').textContent = (totals.total_prompts || 0).toLocaleString();
-    document.getElementById('kpi-total-responses').textContent = (totals.total_responses || 0).toLocaleString();
-    document.getElementById('kpi-total-errors').textContent = (totals.total_errors || 0).toLocaleString();
-    document.getElementById('kpi-input-tokens').textContent = (totals.total_input_tokens || 0).toLocaleString();
-    document.getElementById('kpi-output-tokens').textContent = (totals.total_output_tokens || 0).toLocaleString();
+      // 2. Summary stats
+      const s = data.summary || {};
+      telTotalPrompts.textContent = (s.total_prompts || 0).toLocaleString();
+      telTotalResponses.textContent = (s.total_responses || 0).toLocaleString();
+      telTotalErrors.textContent = (s.total_errors || 0).toLocaleString();
+      telTotalInTokens.textContent = (s.total_input_tokens || 0).toLocaleString();
+      telTotalOutTokens.textContent = (s.total_output_tokens || 0).toLocaleString();
 
-    // Render Charts
-    renderTelemetryCharts(data.charts || {});
-  } catch (e) {
-    console.error('Error loading telemetry:', e);
-  }
-}
+      // 3. Performance stats
+      const p = data.performance || {};
+      valTtft.textContent = `${p.ttft_ms || 0} ms`;
+      valItl.textContent = `${p.itl_ms || 0} ms`;
+      valTps.textContent = `${p.tps || 0} tok/s`;
+      valTpot.textContent = `${p.tpot_ms || 0} ms/tok`;
 
-function renderTelemetryCharts(chartData) {
-  const labels = chartData.labels || [];
-  const prompts = chartData.prompts || [];
-  const responses = chartData.responses || [];
-  const errors = chartData.errors || [];
-  const inTokens = chartData.input_tokens || [];
-  const outTokens = chartData.output_tokens || [];
+      // 4. Render Charts
+      renderTelemetryCharts(data.charts || {});
 
-  // Chart 1: Prompts, Responses, Errors
-  const ctx1 = document.getElementById('chart-requests').getContext('2d');
-  if (requestsChart) requestsChart.destroy();
-
-  requestsChart = new Chart(ctx1, {
-    type: 'line',
-    data: {
-      labels: labels,
-      datasets: [
-        {
-          label: 'Prompts',
-          data: prompts,
-          borderColor: '#6366f1',
-          backgroundColor: 'rgba(99, 102, 241, 0.1)',
-          tension: 0.3,
-          fill: true
-        },
-        {
-          label: 'Responses',
-          data: responses,
-          borderColor: '#10b981',
-          backgroundColor: 'rgba(16, 185, 129, 0.1)',
-          tension: 0.3,
-          fill: true
-        },
-        {
-          label: 'Errors',
-          data: errors,
-          borderColor: '#f43f5e',
-          backgroundColor: 'rgba(244, 63, 94, 0.1)',
-          tension: 0.3,
-          fill: true
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: '#9ca3af' } }
-      },
-      scales: {
-        x: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(255,255,255,0.04)' } },
-        y: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true }
-      }
+    } catch (e) {
+      console.error('Failed to load telemetry:', e);
     }
-  });
-
-  // Chart 2: Input and Output Tokens
-  const ctx2 = document.getElementById('chart-tokens').getContext('2d');
-  if (tokensChart) tokensChart.destroy();
-
-  tokensChart = new Chart(ctx2, {
-    type: 'line',
-    data: {
-      labels: labels,
-      datasets: [
-        {
-          label: 'Input Tokens',
-          data: inTokens,
-          borderColor: '#06b6d4',
-          backgroundColor: 'rgba(6, 182, 212, 0.1)',
-          tension: 0.3,
-          fill: true
-        },
-        {
-          label: 'Output Tokens',
-          data: outTokens,
-          borderColor: '#f59e0b',
-          backgroundColor: 'rgba(245, 158, 11, 0.1)',
-          tension: 0.3,
-          fill: true
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: '#9ca3af' } }
-      },
-      scales: {
-        x: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(255,255,255,0.04)' } },
-        y: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true }
-      }
-    }
-  });
-}
-
-// ----------------- PAGE 4: Audit Log & Event -----------------
-async function fetchLogsData(selectedConvId = null) {
-  let url = '/api/logs';
-  if (selectedConvId) {
-    url += `?conversation_id=${encodeURIComponent(selectedConvId)}`;
   }
 
-  try {
-    const res = await fetch(url);
-    const data = await res.json();
+  function renderTelemetryCharts(chartsData) {
+    const labels = chartsData.labels || [];
+    const prompts = chartsData.prompts || [];
+    const responses = chartsData.responses || [];
+    const errors = chartsData.errors || [];
+    const inTokens = chartsData.input_tokens || [];
+    const outTokens = chartsData.output_tokens || [];
 
-    // KPI Metrics
-    const stats = data.statistics || {};
-    document.getElementById('kpi-log-prompts').textContent = (stats.total_user_prompts || 0).toLocaleString();
-    document.getElementById('kpi-log-model-calls').textContent = (stats.total_model_calls || 0).toLocaleString();
-    document.getElementById('kpi-log-embeds').textContent = (stats.total_ollama_embeds || 0).toLocaleString();
-    document.getElementById('kpi-log-latency').textContent = `${stats.avg_latency_ms || 0} ms`;
+    // Destroy existing Chart instances
+    if (chartThroughputInstance) chartThroughputInstance.destroy();
+    if (chartTokensInstance) chartTokensInstance.destroy();
 
-    // Table 1: Conversations
-    const convTbody = document.getElementById('conversations-tbody');
-    convTbody.innerHTML = '';
-    const convs = data.conversations || [];
-    document.getElementById('conv-total-count').textContent = `Total Conversations: ${convs.length}`;
+    const chartOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#94a3b8', font: { family: 'Inter', size: 11 } } },
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+          ticks: { color: '#64748b', font: { family: 'Inter', size: 10 } },
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+          ticks: { color: '#64748b', font: { family: 'Inter', size: 10 } },
+        },
+      },
+    };
 
-    if (convs.length === 0) {
-      convTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No conversation logs recorded yet.</td></tr>';
-    } else {
-      convs.forEach(c => {
-        const tr = document.createElement('tr');
-        const isSelected = (c.conversation_id === data.selected_conversation_id);
-        if (isSelected) tr.className = 'selected';
-
-        const localTimeStr = new Date(c.timestamp).toLocaleString();
-        tr.innerHTML = `
-          <td>${localTimeStr}</td>
-          <td><code>${escapeHtml(c.conversation_id)}</code></td>
-          <td>${escapeHtml((c.user_query || '').slice(0, 45))}${c.user_query?.length > 45 ? '...' : ''}</td>
-          <td>${escapeHtml((c.agent_response || '').slice(0, 45))}${c.agent_response?.length > 45 ? '...' : ''}</td>
-          <td><span class="evidence-badge">${escapeHtml(c.agent_type || 'Custom Agent')}</span></td>
-          <td>${c.total_events}</td>
-        `;
-        tr.style.cursor = 'pointer';
-        tr.onclick = () => {
-          document.querySelectorAll('#conversations-tbody tr').forEach(r => r.classList.remove('selected'));
-          tr.classList.add('selected');
-          fetchLogsData(c.conversation_id);
-        };
-        convTbody.appendChild(tr);
+    // Chart 1: Throughput
+    const ctx1 = document.getElementById('chartThroughput');
+    if (ctx1 && window.Chart) {
+      chartThroughputInstance = new Chart(ctx1, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: 'Prompts',
+              data: prompts,
+              borderColor: '#3b82f6',
+              backgroundColor: 'rgba(59, 130, 246, 0.1)',
+              tension: 0.3,
+              fill: true,
+            },
+            {
+              label: 'Responses',
+              data: responses,
+              borderColor: '#10b981',
+              backgroundColor: 'rgba(16, 185, 129, 0.1)',
+              tension: 0.3,
+              fill: true,
+            },
+            {
+              label: 'Errors',
+              data: errors,
+              borderColor: '#ef4444',
+              backgroundColor: 'rgba(239, 68, 68, 0.1)',
+              tension: 0.3,
+              fill: true,
+            },
+          ],
+        },
+        options: chartOptions,
       });
     }
 
-    // Table 2: Events
-    const eventsTbody = document.getElementById('events-tbody');
-    eventsTbody.innerHTML = '';
-    const events = data.events || [];
-    allEventsCache = events;
-
-    document.getElementById('events-table-title').textContent =
-      `Events for Conversation for ${data.selected_conversation_id || 'None'}`;
-
-    if (events.length === 0) {
-      eventsTbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No events logged for this conversation.</td></tr>';
-    } else {
-      events.forEach((ev, idx) => {
-        const tr = document.createElement('tr');
-        const localTimeAndDate = new Date(ev.timestamp).toLocaleString();
-        const callTypeTag = ev.call_type ? `<span style="font-size: 0.72rem; padding: 2px 6px; border-radius: 4px; margin-left: 6px; background: ${ev.call_type === 'response' ? 'rgba(16, 185, 129, 0.15); color: #34d399;' : 'rgba(99, 102, 241, 0.15); color: #818cf8;'}">${escapeHtml(ev.call_type)}</span>` : '';
-        tr.innerHTML = `
-          <td>${localTimeAndDate}</td>
-          <td><span class="evidence-badge">${escapeHtml(ev.event_type)}</span>${callTypeTag}</td>
-          <td>${escapeHtml(ev.invoker)}</td>
-          <td>${escapeHtml(ev.target || ev.recipient || '')}</td>
-          <td>${escapeHtml(ev.description || '')}</td>
-        `;
-        tr.style.cursor = 'pointer';
-        tr.onclick = () => openJsonModal(idx);
-        eventsTbody.appendChild(tr);
+    // Chart 2: Tokens
+    const ctx2 = document.getElementById('chartTokens');
+    if (ctx2 && window.Chart) {
+      chartTokensInstance = new Chart(ctx2, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: 'Input Tokens',
+              data: inTokens,
+              borderColor: '#8b5cf6',
+              backgroundColor: 'rgba(139, 92, 246, 0.1)',
+              tension: 0.3,
+              fill: true,
+            },
+            {
+              label: 'Output Tokens',
+              data: outTokens,
+              borderColor: '#06b6d4',
+              backgroundColor: 'rgba(6, 182, 212, 0.1)',
+              tension: 0.3,
+              fill: true,
+            },
+          ],
+        },
+        options: chartOptions,
       });
     }
-
-  } catch (e) {
-    console.error('Error loading logs:', e);
   }
-}
 
-function openJsonModal(eventIndex) {
-  const ev = allEventsCache[eventIndex];
-  if (!ev) return;
+  btnRefreshTelemetry.addEventListener('click', loadTelemetryData);
+  telemetryModelFilter.addEventListener('change', loadTelemetryData);
+  telIntervalSelect.addEventListener('change', loadTelemetryData);
+  
+  telRangeSelect.addEventListener('change', () => {
+    if (telRangeSelect.value === 'Custom') {
+      customDateBoxes.classList.remove('hidden');
+    } else {
+      customDateBoxes.classList.add('hidden');
+      loadTelemetryData();
+    }
+  });
 
-  const callTypeStr = ev.call_type ? ` [${ev.call_type.toUpperCase()}]` : '';
-  document.getElementById('json-modal-title').textContent = `${ev.event_type}${callTypeStr} (${ev.invoker} ➔ ${ev.target || ev.recipient})`;
-  document.getElementById('json-modal-content').textContent = JSON.stringify(ev, null, 2);
-  openModal('modal-json-detail');
-}
+  telStartDate.addEventListener('change', loadTelemetryData);
+  telEndDate.addEventListener('change', loadTelemetryData);
 
-function openClearLogsModal() {
-  openModal('modal-clear-logs');
-}
+  // ---------------------------------------------------------------------------
+  // Page 4: Audit Logs & Events
+  // ---------------------------------------------------------------------------
+  async function loadAuditLogs() {
+    try {
+      const res = await fetch('/api/logs');
+      if (!res.ok) throw new Error('Failed to fetch logs');
+      const data = await res.json();
 
-async function executeClearLogs() {
-  closeModal('modal-clear-logs');
-  try {
-    const res = await fetch('/api/logs/clear', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confirm: true })
+      // Stats
+      const st = data.statistics || {};
+      auditTotalPrompts.textContent = st.total_user_prompts || 0;
+      auditModelCalls.textContent = st.total_model_calls || 0;
+      auditOllamaEmbeds.textContent = st.total_ollama_embeds || 0;
+      auditAvgLatency.textContent = st.avg_latency_ms || '0.0';
+
+      // Conversations Table
+      currentConversationsCache = data.conversations || [];
+      if (currentConversationsCache.length === 0) {
+        conversationsTbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">No conversations recorded yet.</td></tr>`;
+        eventsTbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">No conversation events to display.</td></tr>`;
+        selectedConvBadge.textContent = 'None Selected';
+        return;
+      }
+
+      conversationsTbody.innerHTML = currentConversationsCache.map(c => `
+        <tr class="conv-row ${c.conversation_id === selectedConversationId ? 'selected-row' : ''}" data-cid="${escapeHtml(c.conversation_id)}">
+          <td><span style="font-family:var(--font-mono);font-size:0.75rem;">${escapeHtml(c.timestamp)}</span></td>
+          <td><code style="color:#a5b4fc;">${escapeHtml(c.conversation_id)}</code></td>
+          <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(c.user_query)}</td>
+          <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(c.agent_response)}</td>
+          <td><span class="badge">${escapeHtml(c.agent_type)}</span></td>
+          <td><strong>${c.event_count}</strong></td>
+        </tr>
+      `).join('');
+
+      // Bind row clicks
+      conversationsTbody.querySelectorAll('.conv-row').forEach(row => {
+        row.addEventListener('click', () => {
+          const cid = row.getAttribute('data-cid');
+          selectConversation(cid);
+        });
+      });
+
+      // Auto-select first conversation if none selected
+      if (!selectedConversationId && currentConversationsCache.length > 0) {
+        selectConversation(currentConversationsCache[0].conversation_id);
+      } else if (selectedConversationId) {
+        selectConversation(selectedConversationId);
+      }
+
+    } catch (e) {
+      console.error('Failed to load audit logs:', e);
+    }
+  }
+
+  async function selectConversation(cid) {
+    selectedConversationId = cid;
+    selectedConvBadge.textContent = cid;
+
+    // Highlight row
+    conversationsTbody.querySelectorAll('.conv-row').forEach(row => {
+      if (row.getAttribute('data-cid') === cid) {
+        row.classList.add('selected-row');
+      } else {
+        row.classList.remove('selected-row');
+      }
     });
-    const data = await res.json();
-    alert(data.message || 'Audit logs cleared.');
-    fetchLogsData();
-  } catch (e) {
-    alert(`Error clearing logs: ${e.message}`);
+
+    // Fetch conversation events
+    try {
+      const res = await fetch(`/api/logs/${encodeURIComponent(cid)}`);
+      if (!res.ok) throw new Error('Failed to load events');
+      const data = await res.json();
+      currentEventsCache = data.events || [];
+
+      if (currentEventsCache.length === 0) {
+        eventsTbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">No events recorded for this conversation.</td></tr>`;
+        return;
+      }
+
+      eventsTbody.innerHTML = currentEventsCache.map((evt, idx) => `
+        <tr class="event-row" data-idx="${idx}">
+          <td><span style="font-family:var(--font-mono);font-size:0.75rem;">${escapeHtml(evt.local_time)}</span></td>
+          <td><span class="step-bubble ${evt.event_type.toLowerCase().replace(/\s+/g, '-')}">${escapeHtml(evt.event_type)}</span></td>
+          <td><strong>${escapeHtml(evt.invoker)}</strong></td>
+          <td>${escapeHtml(evt.target)}</td>
+          <td>${escapeHtml(evt.short_description)}</td>
+        </tr>
+      `).join('');
+
+      // Bind click to open detail inspector
+      eventsTbody.querySelectorAll('.event-row').forEach(row => {
+        row.addEventListener('click', () => {
+          const idx = parseInt(row.getAttribute('data-idx'));
+          const evt = currentEventsCache[idx];
+          if (evt) showEventDetailModal(evt);
+        });
+      });
+
+    } catch (e) {
+      eventsTbody.innerHTML = `<tr><td colspan="5" class="text-danger">Error loading events: ${e.message}</td></tr>`;
+    }
   }
-}
 
-// ----------------- Modal Utility -----------------
-function openModal(modalId) {
-  const m = document.getElementById(modalId);
-  if (m) m.classList.add('active');
-}
+  function extractPromptAndResponse(evt) {
+    const payload = evt.payload || {};
+    let prompt = null;
+    let response = null;
 
-function closeModal(modalId) {
-  const m = document.getElementById(modalId);
-  if (m) m.classList.remove('active');
-}
+    // Extract Prompt / Input
+    if (payload.prompt !== undefined && payload.prompt !== null) {
+      prompt = payload.prompt;
+      if (payload.system_instruction && typeof prompt === 'string') {
+        prompt = `[System Instruction]\n${payload.system_instruction}\n\n[User Prompt]\n${prompt}`;
+      }
+    } else if (payload.message !== undefined && payload.message !== null) {
+      prompt = payload.message;
+    } else if (payload.query !== undefined && payload.query !== null) {
+      prompt = payload.query;
+    } else if (payload.arguments !== undefined && payload.arguments !== null) {
+      prompt = payload.arguments;
+    } else if (payload.text_sample !== undefined && payload.text_sample !== null) {
+      prompt = payload.text_sample;
+    } else if (payload.input !== undefined && payload.input !== null) {
+      prompt = payload.input;
+    }
 
-function escapeHtml(text) {
-  if (!text) return '';
-  return String(text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
+    // Extract Response / Output
+    if (payload.response_text !== undefined && payload.response_text !== null) {
+      response = payload.response_text;
+    } else if (payload.response !== undefined && payload.response !== null) {
+      response = payload.response;
+    } else if (payload.result !== undefined && payload.result !== null) {
+      response = payload.result;
+    } else if (payload.matches !== undefined && payload.matches !== null) {
+      response = payload.matches;
+    } else if (payload.results !== undefined && payload.results !== null) {
+      response = payload.results;
+    } else if (payload.output !== undefined && payload.output !== null) {
+      response = payload.output;
+    } else if (payload.raw_response !== undefined && payload.raw_response !== null) {
+      response = payload.raw_response;
+    }
+
+    // Contextual fallback: if neither is set, use description for prompt
+    if (prompt === null && response === null && evt.short_description) {
+      prompt = evt.short_description;
+    }
+
+    return { prompt, response };
+  }
+
+  function renderFormattedContent(content, container) {
+    if (!container) return;
+
+    if (content === null || content === undefined || content === '') {
+      container.innerHTML = `<div class="text-muted-box">None recorded for this event step.</div>`;
+      return;
+    }
+
+    // Determine if content is JSON or a JSON string
+    let isJson = false;
+    let parsedObj = null;
+
+    if (typeof content === 'object') {
+      isJson = true;
+      parsedObj = content;
+    } else if (typeof content === 'string') {
+      const trimmed = content.trim();
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try {
+          parsedObj = JSON.parse(trimmed);
+          isJson = true;
+        } catch (e) {
+          isJson = false;
+        }
+      }
+    }
+
+    if (isJson && parsedObj !== null) {
+      const jsonStr = JSON.stringify(parsedObj, null, 2);
+      container.innerHTML = `
+        <div class="json-viewer-container">
+          <div class="json-viewer-header">
+            <span><i class="fas fa-code"></i> JSON Viewer</span>
+            <button type="button" class="btn-copy">📋 Copy</button>
+          </div>
+          <pre class="json-code-block">${escapeHtml(jsonStr)}</pre>
+        </div>
+      `;
+      const copyBtn = container.querySelector('.btn-copy');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(jsonStr);
+          copyBtn.textContent = '✅ Copied!';
+          setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 2000);
+        });
+      }
+    } else {
+      const textStr = typeof content === 'string' ? content : String(content);
+      container.innerHTML = `
+        <div class="human-readable-text-box">
+          <div class="text-box-header">
+            <span><i class="fas fa-align-left"></i> Human Readable Text</span>
+            <button type="button" class="btn-copy">📋 Copy</button>
+          </div>
+          <div class="text-box-content">${escapeHtml(textStr)}</div>
+        </div>
+      `;
+      const copyBtn = container.querySelector('.btn-copy');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(textStr);
+          copyBtn.textContent = '✅ Copied!';
+          setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 2000);
+        });
+      }
+    }
+  }
+
+  function showEventDetailModal(evt) {
+    eventModalMeta.innerHTML = `
+      <div><span style="color:var(--text-muted);">Event ID:</span> <code>${escapeHtml(evt.id || '')}</code></div>
+      <div><span style="color:var(--text-muted);">Time (Local):</span> <strong>${escapeHtml(evt.local_time || '')}</strong></div>
+      <div><span style="color:var(--text-muted);">Event Type:</span> <strong style="color:#60a5fa;">${escapeHtml(evt.event_type || '')}</strong></div>
+      <div><span style="color:var(--text-muted);">Latency:</span> <strong>${evt.elapsed_ms ? `${evt.elapsed_ms} ms` : 'N/A'}</strong></div>
+      <div><span style="color:var(--text-muted);">Invoker:</span> <strong>${escapeHtml(evt.invoker || '')}</strong></div>
+      <div><span style="color:var(--text-muted);">Target:</span> <strong>${escapeHtml(evt.target || '')}</strong></div>
+      <div style="grid-column: span 2;"><span style="color:var(--text-muted);">Description:</span> <strong>${escapeHtml(evt.short_description || '')}</strong></div>
+    `;
+
+    const { prompt, response } = extractPromptAndResponse(evt);
+    renderFormattedContent(prompt, eventModalPromptContainer);
+    renderFormattedContent(response, eventModalResponseContainer);
+
+    const jsonText = JSON.stringify(evt.payload || {}, null, 2);
+    eventModalJson.textContent = jsonText;
+    eventDetailModal.classList.remove('hidden');
+  }
+
+  btnCloseEventModal.addEventListener('click', () => eventDetailModal.classList.add('hidden'));
+  btnCloseEventModal2.addEventListener('click', () => eventDetailModal.classList.add('hidden'));
+
+  btnCopyJson.addEventListener('click', () => {
+    navigator.clipboard.writeText(eventModalJson.textContent);
+    btnCopyJson.textContent = '✅ Copied!';
+    setTimeout(() => { btnCopyJson.textContent = '📋 Copy'; }, 2000);
+  });
+
+  // Clear Logs Modal Flow
+  btnClearLogs.addEventListener('click', () => {
+    clearLogsModal.classList.remove('hidden');
+  });
+
+  btnCancelClearLogs.addEventListener('click', () => {
+    clearLogsModal.classList.add('hidden');
+  });
+
+  btnConfirmClearLogs.addEventListener('click', async () => {
+    try {
+      await fetch('/api/logs/clear', { method: 'POST' });
+      clearLogsModal.classList.add('hidden');
+      selectedConversationId = null;
+      loadAuditLogs();
+    } catch (e) {
+      alert('Failed to clear logs.');
+    }
+  });
+
+  btnRefreshLogs.addEventListener('click', loadAuditLogs);
+
+  // ---------------------------------------------------------------------------
+  // Utility Functions
+  // ---------------------------------------------------------------------------
+  function escapeHtml(text) {
+    if (!text) return '';
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function formatMarkdownText(text) {
+    if (!text) return '';
+    let clean = escapeHtml(text);
+    // Bold
+    clean = clean.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    // Code blocks
+    clean = clean.replace(/```([\s\S]*?)```/g, '<pre style="background:rgba(0,0,0,0.4);padding:8px;border-radius:6px;overflow-x:auto;">$1</pre>');
+    // Inline code
+    clean = clean.replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.08);padding:2px 5px;border-radius:4px;color:#93c5fd;">$1</code>');
+    // Newlines to br
+    clean = clean.replace(/\n/g, '<br>');
+    return clean;
+  }
+
+  // Initial Data Load
+  loadModelsAndSkills();
+});

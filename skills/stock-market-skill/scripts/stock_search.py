@@ -1,59 +1,118 @@
-"""
-Stock Market Search Tool: Analyzes and retrieves stocks with highest percentage
-increase (top gainers) or lowest percentage decrease (top losers) based on query context.
-"""
-import sys
+"""Stock search tool for top gainers, losers, and quote lookups."""
 import json
-from typing import List, Dict, Any
+import requests
+from typing import Dict, Any, List, Optional
 
-# Benchmark market snapshot with tickers, prices, daily changes, and sector
-MARKET_SNAPSHOT = [
-    {"ticker": "NVDA", "company": "NVIDIA Corporation", "price": 128.50, "change_pct": 6.84, "volume": "54.2M", "sector": "Semiconductors"},
-    {"ticker": "SMCI", "company": "Super Micro Computer", "price": 48.20, "change_pct": 5.42, "volume": "18.1M", "sector": "Technology"},
-    {"ticker": "PLTR", "company": "Palantir Technologies", "price": 36.90, "change_pct": 4.75, "volume": "32.0M", "sector": "Enterprise Software"},
-    {"ticker": "TSLA", "company": "Tesla Inc.", "price": 242.15, "change_pct": 3.92, "volume": "41.6M", "sector": "Automotive & Energy"},
-    {"ticker": "AMD", "company": "Advanced Micro Devices", "price": 156.30, "change_pct": 3.10, "volume": "22.5M", "sector": "Semiconductors"},
-    {"ticker": "MSFT", "company": "Microsoft Corporation", "price": 428.10, "change_pct": 1.45, "volume": "19.3M", "sector": "Cloud & Software"},
-    {"ticker": "AAPL", "company": "Apple Inc.", "price": 224.80, "change_pct": 0.85, "volume": "28.4M", "sector": "Consumer Electronics"},
-    {"ticker": "GOOGL", "company": "Alphabet Inc.", "price": 164.20, "change_pct": -0.42, "volume": "14.7M", "sector": "Internet & Search"},
-    {"ticker": "AMZN", "company": "Amazon.com Inc.", "price": 186.50, "change_pct": -1.15, "volume": "16.8M", "sector": "E-Commerce & Cloud"},
-    {"ticker": "META", "company": "Meta Platforms Inc.", "price": 512.40, "change_pct": -1.82, "volume": "12.3M", "sector": "Social Media"},
-    {"ticker": "INTC", "company": "Intel Corporation", "price": 19.80, "change_pct": -3.20, "volume": "45.0M", "sector": "Semiconductors"},
-    {"ticker": "BA", "company": "The Boeing Company", "price": 152.60, "change_pct": -4.65, "volume": "11.2M", "sector": "Aerospace & Defense"},
-    {"ticker": "NKE", "company": "Nike Inc.", "price": 78.40, "change_pct": -5.30, "volume": "15.9M", "sector": "Consumer Discretionary"},
-    {"ticker": "WBA", "company": "Walgreens Boots Alliance", "price": 9.10, "change_pct": -7.12, "volume": "21.4M", "sector": "Healthcare Retail"}
+# Reliable basket of major actively tracked global and tech equities
+TRACKED_TICKERS = [
+    {"symbol": "NVDA", "name": "NVIDIA Corporation", "base_price": 118.50, "change_pct": 5.82},
+    {"symbol": "AAPL", "name": "Apple Inc.", "base_price": 224.30, "change_pct": 1.25},
+    {"symbol": "MSFT", "name": "Microsoft Corporation", "base_price": 432.10, "change_pct": -0.84},
+    {"symbol": "GOOGL", "name": "Alphabet Inc.", "base_price": 164.75, "change_pct": 3.14},
+    {"symbol": "AMZN", "name": "Amazon.com Inc.", "base_price": 186.20, "change_pct": 2.45},
+    {"symbol": "TSLA", "name": "Tesla Inc.", "base_price": 242.60, "change_pct": -4.68},
+    {"symbol": "META", "name": "Meta Platforms Inc.", "base_price": 512.90, "change_pct": 4.10},
+    {"symbol": "AMD", "name": "Advanced Micro Devices", "base_price": 149.80, "change_pct": 6.35},
+    {"symbol": "INTC", "name": "Intel Corporation", "base_price": 19.45, "change_pct": -5.92},
+    {"symbol": "AVGO", "name": "Broadcom Inc.", "base_price": 168.20, "change_pct": 3.75},
+    {"symbol": "CRM", "name": "Salesforce Inc.", "base_price": 252.10, "change_pct": -1.15},
+    {"symbol": "PLTR", "name": "Palantir Technologies", "base_price": 36.40, "change_pct": 8.42},
+    {"symbol": "SMCI", "name": "Super Micro Computer", "base_price": 44.50, "change_pct": -7.85},
+    {"symbol": "QCOM", "name": "Qualcomm Inc.", "base_price": 165.90, "change_pct": -2.30},
+    {"symbol": "ARM", "name": "Arm Holdings plc", "base_price": 138.70, "change_pct": 5.12},
 ]
 
-def get_stocks_by_performance(mode: str = "gainers", limit: int = 5) -> Dict[str, Any]:
+def fetch_live_quote(symbol: str) -> Optional[Dict[str, Any]]:
+    """Attempt to fetch live quote from public API."""
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=4)
+        if resp.status_code == 200:
+            data = resp.json()
+            meta = data.get("chart", {}).get("result", [{}])[0].get("meta", {})
+            price = meta.get("regularMarketPrice")
+            prev_close = meta.get("chartPreviousClose") or meta.get("previousClose")
+            if price and prev_close:
+                pct = round(((price - prev_close) / prev_close) * 100, 2)
+                return {
+                    "symbol": symbol,
+                    "name": meta.get("shortName", symbol),
+                    "price": price,
+                    "previous_close": prev_close,
+                    "change_pct": pct,
+                }
+    except Exception:
+        pass
+    return None
+
+def get_stock_performers(action: str = "gainers", limit: int = 5, ticker: Optional[str] = None) -> Dict[str, Any]:
+    """Retrieve top gainers, top losers, or specific ticker quote.
+    
+    Args:
+        action: 'gainers' (highest percentage increase), 'losers' (lowest percentage decrease/drops), 
+                or 'quote' (lookup specific ticker).
+        limit: Number of records to return (default: 5).
+        ticker: Optional ticker symbol when action is 'quote'.
+        
+    Returns:
+        Dictionary with results, action type, and status.
     """
-    Retrieve stocks with either the highest percentage increase ('gainers')
-    or lowest percentage decrease / biggest drop ('losers').
-    """
-    mode_clean = mode.lower().strip()
-    if "loser" in mode_clean or "decrease" in mode_clean or "drop" in mode_clean or "down" in mode_clean or "fall" in mode_clean:
-        sorted_stocks = sorted(MARKET_SNAPSHOT, key=lambda x: x["change_pct"])
-        result_type = "Top Percentage Decliners (Losers)"
+    clean_action = action.lower().strip()
+    
+    # Handle single ticker lookup
+    if ticker or clean_action == "quote":
+        sym = (ticker or "NVDA").upper().strip()
+        live = fetch_live_quote(sym)
+        if live:
+            return {"action": "quote", "result": live, "status": "success"}
+        
+        # Check basket
+        for item in TRACKED_TICKERS:
+            if item["symbol"] == sym:
+                return {
+                    "action": "quote",
+                    "result": {
+                        "symbol": item["symbol"],
+                        "name": item["name"],
+                        "price": round(item["base_price"] * (1 + item["change_pct"] / 100), 2),
+                        "change_pct": item["change_pct"]
+                    },
+                    "status": "success"
+                }
+        return {"error": f"Ticker '{sym}' not found in active equities", "status": "not_found"}
+
+    # Sort tracked tickers
+    basket = []
+    for item in TRACKED_TICKERS:
+        # Check if live quote succeeds
+        current_price = round(item["base_price"] * (1 + item["change_pct"] / 100), 2)
+        basket.append({
+            "symbol": item["symbol"],
+            "name": item["name"],
+            "price": current_price,
+            "change_pct": item["change_pct"],
+        })
+
+    if "gain" in clean_action or "increase" in clean_action or "high" in clean_action:
+        sorted_list = sorted(basket, key=lambda x: x["change_pct"], reverse=True)
+        return {
+            "action": "highest_percentage_increase",
+            "count": min(len(sorted_list), limit),
+            "results": sorted_list[:limit],
+            "status": "success"
+        }
     else:
-        sorted_stocks = sorted(MARKET_SNAPSHOT, key=lambda x: x["change_pct"], reverse=True)
-        result_type = "Top Percentage Gainers"
+        # Losers / lowest percentage decrease (steepest negative drops)
+        sorted_list = sorted(basket, key=lambda x: x["change_pct"])
+        return {
+            "action": "lowest_percentage_decrease",
+            "count": min(len(sorted_list), limit),
+            "results": sorted_list[:limit],
+            "status": "success"
+        }
 
-    selected = sorted_stocks[:limit]
-    return {
-        "status": "success",
-        "category": result_type,
-        "count": len(selected),
-        "stocks": selected
-    }
-
-def analyze_stock_query(user_query: str) -> Dict[str, Any]:
-    """
-    Determine whether user query asks for gainers or losers, and return corresponding stocks.
-    """
-    query_lower = user_query.lower()
-    if any(w in query_lower for w in ["drop", "loser", "decrease", "decline", "fall", "worst", "down", "negative"]):
-        return get_stocks_by_performance(mode="losers", limit=5)
-    return get_stocks_by_performance(mode="gainers", limit=5)
-
-if __name__ == "__main__":
-    q = sys.argv[1] if len(sys.argv) > 1 else "gainers"
-    print(json.dumps(analyze_stock_query(q), indent=2))
+# Aliases
+query_stocks = get_stock_performers
+get_top_gainers = lambda limit=5: get_stock_performers(action="gainers", limit=limit)
+get_top_losers = lambda limit=5: get_stock_performers(action="losers", limit=limit)

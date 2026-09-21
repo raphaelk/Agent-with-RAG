@@ -1,23 +1,41 @@
 ---
-name: Stock Market Skill
-description: Get the list of stocks with the highest percentage increase (top gainers) or lowest percentage decrease / biggest drops based on the chat question.
-Trigger Queries:
-  - Which stocks had the highest percentage increase today?
-  - What are the top gaining stocks in the market?
-  - Show me the stocks with the biggest drops or largest decrease
-  - List the worst performing stocks today
-  - Give me the top stock gainers and losers
+name: stock-market-skill
+description: Analyze market equities and retrieve the list of stocks with the highest percentage increase (top gainers), lowest percentage decrease / biggest drop (top losers), or detailed quotes for specific tickers. Use this skill whenever the user asks about stock market performance, gainers, losers, ticker prices, or equity percentage changes.
+triggers:
+  - top gaining stocks
+  - highest percentage increase stocks
+  - stocks with lowest percentage decrease
+  - biggest stock losers
+  - top market performers
+  - stock price of [ticker]
 ---
 
 # Stock Market Skill
 
-## Overview
-This skill analyzes stock market performance movements to rank and return equities demonstrating either the highest percentage appreciation (gainers) or the lowest percentage decrease / steepest drops (losers) in response to the user query.
+## Description
+Tracks and analyzes equity market securities to identify top gainers (highest percentage increase) and biggest losers (lowest percentage decrease / steepest drops), as well as quote data across major exchanges (NASDAQ, NYSE, S&P 500).
 
-## Standard Operating Procedure (SOP)
-1. **Detect Intent (Gainers vs. Decliners)**:
-   - Identify whether the user is querying for positive surges (gainers/increase) or negative contractions (losers/decrease/drop).
-2. **Execute Stock Ranking Tool**:
-   - Run `skills/stock-market-skill/scripts/stock_search.py` or invoke `analyze_stock_query(query)`.
-3. **Format Response**:
-   - Return ticker symbol, company name, latest price, percentage change, and trading volume in an intuitive tabular or structured summary.
+## SOP & Tool Execution
+When the user asks for stock gainers, losers, or market performance:
+1. Determine whether the query asks for `gainers`, `losers`, or a specific ticker quote.
+2. Invoke `stock_search.get_stock_performers`:
+```json
+{
+  "tool": "stock_search.get_stock_performers",
+  "arguments": {
+    "action": "gainers",
+    "limit": 5
+  }
+}
+```
+Or for losers:
+```json
+{
+  "tool": "stock_search.get_stock_performers",
+  "arguments": {
+    "action": "losers",
+    "limit": 5
+  }
+}
+```
+3. Synthesize the ticker symbol, company name, current price, and percentage change.

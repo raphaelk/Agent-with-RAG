@@ -1,352 +1,351 @@
-"""
-LLM Integration Service.
-Handles model discovery, Google AI Studio Gemini integration,
-Custom OpenAI-compatible endpoints, and prompt synthesis with RAG context grounding.
-"""
+"""LLM service connecting to Google AI Studio and Custom OpenAI-compatible endpoints."""
 import json
-import os
 import time
+from typing import Dict, Any, List, Optional
 import requests
-from typing import List, Dict, Any, Optional
-from config import GEMINI_API_KEY, GOOGLE_AI_MODELS, DEFAULT_CUSTOM_ENDPOINT, DEFAULT_LLM_MODEL
-from services.log_service import audit_logger
+from google import genai
+from google.genai import types
+import config
+from services.log_service import get_log_service
+from services.telemetry_service import get_telemetry_service
 
 class LLMService:
-    def __init__(self):
-        self.last_custom_endpoint = DEFAULT_CUSTOM_ENDPOINT
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or config.GEMINI_API_KEY
+        self.client = genai.Client(api_key=self.api_key) if self.api_key else None
+        self.logger = get_log_service()
+        self.telemetry = get_telemetry_service()
         self._cached_models: Optional[List[Dict[str, Any]]] = None
 
-    @property
-    def api_key(self):
-        import config
-        return config.GEMINI_API_KEY
+    def get_active_models(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """Fetch list of ONLY active LLM models capable of text generation (generateContent)."""
+        if self._cached_models and not force_refresh:
+            return self._cached_models
 
-    def list_available_models(self) -> List[Dict[str, Any]]:
-        """
-        Query Google AI Studio for active text-generation models via API if key is present.
-        Only includes active text generation models (excluding audio, image, tts, robotics).
-        Places DEFAULT_LLM_MODEL at the top as the default.
-        """
-        models = []
-        key = self.api_key
-        excluded_keywords = ["tts", "image", "clip", "lyria", "transcribe", "robotics", "computer-use", "banana"]
-
-        if key:
+        models_list: List[Dict[str, Any]] = []
+        if self.client:
             try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
-                res = requests.get(url, timeout=5)
-                audit_logger.log_call(
-                    event_type="external API call",
-                    call_type="invocation",
-                    invoker="agent",
-                    recipient="external API call",
-                    payload={"action": "list_models", "url": "https://generativelanguage.googleapis.com/v1beta/models?key=****"},
-                    description="Queried Google AI Studio API for active models"
-                )
-                if res.status_code == 200:
-                    data = res.json()
-                    audit_logger.log_call(
-                        event_type="external API call",
-                        call_type="response",
-                        invoker="external API call",
-                        recipient="agent",
-                        payload={"status_code": 200, "model_count": len(data.get("models", []))},
-                        description="Received active models from Google AI Studio API"
-                    )
-                    for m in data.get("models", []):
-                        methods = m.get("supportedGenerationMethods", [])
-                        m_name = m.get("name", "").replace("models/", "")
-                        # Filter strictly for active LLM text generation models
-                        if "generateContent" in methods and not any(ex in m_name.lower() for ex in excluded_keywords):
-                            max_tok = m.get("outputTokenLimit", 8192)
-                            models.append({
-                                "id": m_name,
-                                "name": m.get("displayName", m_name),
-                                "max_tokens": max_tok
-                            })
+                raw_models = self.client.models.list()
+                for m in raw_models:
+                    supported = getattr(m, "supported_actions", []) or []
+                    if "generateContent" in supported:
+                        name = m.name
+                        if name.startswith("models/"):
+                            name = name[len("models/"):]
+                        
+                        out_limit = getattr(m, "output_token_limit", 4096) or 4096
+                        in_limit = getattr(m, "input_token_limit", 32768) or 32768
+                        
+                        models_list.append({
+                            "id": name,
+                            "display_name": getattr(m, "display_name", name) or name,
+                            "output_token_limit": out_limit,
+                            "input_token_limit": in_limit,
+                            "description": getattr(m, "description", "") or "",
+                        })
             except Exception as e:
-                print(f"[LLMService] Google AI Studio model list error: {e}")
+                print(f"[LLMService] Failed to list models from Google AI Studio: {e}")
 
-        # If no models retrieved, fall back to configured models
-        if not models:
-            models = list(GOOGLE_AI_MODELS)
+        # Ensure DEFAULT_LLM_MODEL is included
+        found_default = False
+        for item in models_list:
+            if item["id"] == config.DEFAULT_LLM_MODEL:
+                found_default = True
+                break
+        
+        if not found_default:
+            models_list.insert(0, {
+                "id": config.DEFAULT_LLM_MODEL,
+                "display_name": config.DEFAULT_LLM_MODEL,
+                "output_token_limit": 32768,
+                "input_token_limit": 262144,
+                "description": "Google Gemma 4 26B instruction-tuned model",
+            })
 
-        # Ensure DEFAULT_LLM_MODEL is present and at the top
-        default_item = next((m for m in models if m["id"] == DEFAULT_LLM_MODEL), None)
-        if default_item:
-            models.remove(default_item)
-            models.insert(0, default_item)
-        else:
-            models.insert(0, {"id": DEFAULT_LLM_MODEL, "name": "Gemma 4 26B A4B IT", "max_tokens": 8192})
+        # Put default model at top of list
+        models_list.sort(key=lambda x: 0 if x["id"] == config.DEFAULT_LLM_MODEL else 1)
+        self._cached_models = models_list
+        return models_list
 
-        # Always append Custom model option
-        if not any(m["id"] == "custom" for m in models):
-            models.append({"id": "custom", "name": "Custom Model (Endpoint)", "max_tokens": 4096})
+    def get_model_max_tokens(self, model_id: str) -> int:
+        """Return maximum output tokens allowed for model."""
+        models = self.get_active_models()
+        for m in models:
+            if m["id"] == model_id:
+                return m.get("output_token_limit", 4096)
+        return 4096
 
-        self._cached_models = models
-        return models
-
-    def generate_response(
+    def generate_text(
         self,
         prompt: str,
-        system_instruction: str = "",
-        model: str = DEFAULT_LLM_MODEL,
-        temperature: float = 0.7,
-        max_tokens: int = 2048,
+        model: str = config.DEFAULT_LLM_MODEL,
+        system_instruction: Optional[str] = None,
+        temperature: float = config.DEFAULT_TEMPERATURE,
+        max_tokens: Optional[int] = None,
         custom_endpoint: Optional[str] = None,
-        conversation_id: str = "conv-1"
+        conversation_id: str = "system",
+        invoker: str = "Custom Agent",
     ) -> Dict[str, Any]:
-        """
-        Generate completion via Google AI Studio, custom endpoint, or offline synthesis fallback.
-        Logs invocations between 'agent', 'external API call', and 'prompts sent to and response received from the model'.
-        """
+        """Send prompt to LLM and log full request & response payloads per specification."""
         start_time = time.time()
-        input_tokens = len(prompt.split()) + len(system_instruction.split())
+        max_tok = max_tokens or config.DEFAULT_MAX_TOKENS
 
-        if custom_endpoint:
-            self.last_custom_endpoint = custom_endpoint
-
-        # Case 1: Custom OpenAI-compatible endpoint
-        if model.lower() == "custom":
-            endpoint = custom_endpoint or self.last_custom_endpoint
-            payload = {
-                "model": "custom-model",
-                "messages": [
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": temperature,
-                "max_tokens": max_tokens
-            }
-            try:
-                res = requests.post(endpoint, json=payload, timeout=30)
-                latency = (time.time() - start_time) * 1000
-                if res.status_code == 200:
-                    data = res.json()
-                    output_text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                    output_tokens = len(output_text.split())
-
-                    # Log LLM invocation & response with FULL payload (Do not log API call for model access per SPECIFICATION.md)
-                    audit_logger.log_call(
-                        event_type="LLM",
-                        call_type="invocation",
-                        invoker="agent",
-                        recipient="LLM",
-                        payload={"model": "custom", "endpoint": endpoint, "prompt": prompt, "system_instruction": system_instruction, "temperature": temperature, "max_tokens": max_tokens, "request_body": payload},
-                        description="Prompts sent to custom model with full payload",
-                        conversation_id=conversation_id
-                    )
-                    audit_logger.log_call(
-                        event_type="LLM",
-                        call_type="response",
-                        invoker="LLM",
-                        recipient="agent",
-                        payload={"content": output_text, "raw_response": data, "input_tokens": input_tokens, "output_tokens": output_tokens},
-                        description="Response received from custom model with full payload",
-                        conversation_id=conversation_id,
-                        latency_ms=latency
-                    )
-
-                    return {
-                        "content": output_text,
-                        "model": "custom",
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "latency_ms": latency
-                    }
-                else:
-                    raise RuntimeError(f"Custom endpoint returned status {res.status_code}: {res.text}")
-            except Exception as e:
-                latency = (time.time() - start_time) * 1000
-                print(f"[LLMService] Custom endpoint exception: {e}")
-
-        # Case 2: Google AI Studio Gemini API
-        key = self.api_key
-        if key and model.lower() != "custom":
-            clean_model = model.replace("models/", "")
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={key}"
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": temperature,
-                    "maxOutputTokens": max_tokens
-                }
-            }
-            if system_instruction:
-                payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-
-            # Log LLM prompts sent to model with FULL payload (Do not log API call for model access per SPECIFICATION.md)
-            audit_logger.log_call(
-                event_type="LLM",
-                call_type="invocation",
-                invoker="agent",
-                recipient="LLM",
-                payload={"model": clean_model, "prompt": prompt, "system_instruction": system_instruction, "temperature": temperature, "max_tokens": max_tokens, "url": f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key=****", "request_body": payload},
-                description=f"Prompts sent to model {clean_model} with full payload",
-                conversation_id=conversation_id
-            )
-
-            try:
-                res = requests.post(url, json=payload, timeout=30)
-                latency = (time.time() - start_time) * 1000
-                if res.status_code == 200:
-                    data = res.json()
-                    candidates = data.get("candidates", [])
-                    output_text = ""
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        non_thought_parts = [p.get("text", "") for p in parts if not p.get("thought")]
-                        if non_thought_parts:
-                            output_text = "".join(non_thought_parts).strip()
-                        elif parts:
-                            output_text = "".join([p.get("text", "") for p in parts]).strip()
-                    output_tokens = len(output_text.split())
-
-                    # Log LLM response received from model with FULL payload
-                    audit_logger.log_call(
-                        event_type="LLM",
-                        call_type="response",
-                        invoker="LLM",
-                        recipient="agent",
-                        payload={"content": output_text, "full_api_response": data, "input_tokens": input_tokens, "output_tokens": output_tokens, "model": clean_model},
-                        description=f"Response received from model {clean_model} with full payload",
-                        conversation_id=conversation_id,
-                        latency_ms=latency
-                    )
-
-                    return {
-                        "content": output_text,
-                        "model": clean_model,
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                        "latency_ms": latency
-                    }
-                else:
-                    raise RuntimeError(f"Google AI Studio error {res.status_code}: {res.text}")
-            except Exception as e:
-                latency = (time.time() - start_time) * 1000
-                print(f"[LLMService] Google AI Studio API error: {e}")
-
-        # Case 3: Offline Intelligent Synthesis Engine
-        # Synthesizes response based on provided prompt & context evidence
-        latency = (time.time() - start_time) * 1000 + 45.0
-        synthesis = self._synthesize_offline(prompt, system_instruction)
-        output_tokens = len(synthesis.split())
-
-        # Log LLM prompts sent to model with FULL payload
-        audit_logger.log_call(
-            event_type="LLM",
-            call_type="invocation",
-            invoker="agent",
-            recipient="LLM",
-            payload={"model": model, "prompt": prompt, "system_instruction": system_instruction, "temperature": temperature, "max_tokens": max_tokens},
-            description=f"Prompts sent to {model} with full payload",
-            conversation_id=conversation_id
-        )
-
-        # Log LLM response received from model with FULL payload
-        audit_logger.log_call(
-            event_type="LLM",
-            call_type="response",
-            invoker="LLM",
-            recipient="agent",
-            payload={"content": synthesis, "input_tokens": input_tokens, "output_tokens": output_tokens},
-            description=f"Response received from {model} with full payload",
-            conversation_id=conversation_id,
-            latency_ms=latency
-        )
-
-        return {
-            "content": synthesis,
+        # Log LLM Invocation request with FULL payload
+        req_payload = {
             "model": model,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "latency_ms": latency
+            "prompt": prompt,
+            "system_instruction": system_instruction,
+            "temperature": temperature,
+            "max_tokens": max_tok,
+            "custom_endpoint": custom_endpoint,
         }
 
-    def _synthesize_offline(self, prompt: str, system_instruction: str) -> str:
-        """
-        Deterministic, coherent synthesis engine when external keys/endpoints are offline or fail.
-        Supports skill routing, tool execution planning, and grounded evidence synthesis.
-        """
-        prompt_lower = prompt.lower()
-        sys_lower = system_instruction.lower()
+        self.logger.log_event(
+            conversation_id=conversation_id,
+            event_type="LLM",
+            invoker=invoker,
+            target=f"Model: {model}",
+            short_description=f"Prompt sent to {model} ({len(prompt)} chars)",
+            payload=req_payload,
+        )
 
-        # Case 1: Skill Router
-        if "skill router" in sys_lower or "available skills:" in prompt_lower:
-            for skill_kw in ["time-weather-skill", "person-information-skill", "stock-market-skill", "document-retriever-skill"]:
-                short_kw = skill_kw.replace("-skill", "").split("-")
-                if any(kw in prompt_lower for kw in short_kw):
-                    return skill_kw
-            return "NONE"
-
-        # Case 2: Tool Execution Plan / Orchestrator Directive
-        if (
-            "tool execution plan" in sys_lower or
-            "tool execution plan" in prompt_lower or
-            "highest matching skill:" in prompt_lower or
-            "top matching skills:" in prompt_lower or
-            "ai agent orchestrator" in sys_lower or
-            "respond with json format" in sys_lower or
-            "respond with json format" in prompt_lower
-        ):
-            # Check if JSON format is expected (per SPECIFICATION.md)
-            if "json" in sys_lower or "json" in prompt_lower:
-                user_q = ""
-                if "user question:" in prompt_lower:
-                    user_q = prompt_lower.split("user question:", 1)[1].split("\n", 1)[0].strip()
-                target_text = user_q or prompt_lower
-
-                if any(w in target_text for w in ["weather", "time", "tokyo", "london", "paris", "temperature"]):
-                    city = "London" if "london" in target_text else "Tokyo"
-                    return json.dumps({
-                        "tool": "env_tools.get_weather_and_time",
-                        "arguments": {"city": city}
-                    }, indent=2)
-                elif any(w in target_text for w in ["person", "employee", "registry", "lucas", "who is", "kenji", "job title"]):
-                    return json.dumps({
-                        "tool": "person_search.query_person_registry",
-                        "arguments": {"keyword": "Lucas Dubois", "field": "name"}
-                    }, indent=2)
-                elif any(w in target_text for w in ["stock", "market", "gainer", "loser", "decline"]):
-                    return json.dumps({
-                        "tool": "stock_search.analyze_stock_query",
-                        "arguments": {"query": "gainers"}
-                    }, indent=2)
-                elif "document-retriever-skill" in prompt_lower or any(w in target_text for w in ["document", "strategy", "report", "financial"]):
-                    return json.dumps({
-                        "tool": "document_search_tool.search_documents",
-                        "arguments": {"query": user_q or "marketing strategy", "top_k": 5}
-                    }, indent=2)
-                else:
-                    return json.dumps({
-                        "tool": "none",
-                        "arguments": {}
-                    }, indent=2)
-
-            if "document-retriever-skill" in prompt_lower or "retriever" in prompt_lower:
-                return "DIRECTIVE: EXECUTE_DOCUMENT_SEARCH"
-            for line in prompt.split("\n"):
-                if "- skill:" in line.lower() or "- skill #" in line.lower() or "skill #" in line.lower():
-                    skill_name = line.split(":", 1)[1].strip().split("(")[0].strip()
-                    return f"DIRECTIVE: EXECUTE_TOOL: {skill_name}"
-            return "DIRECTIVE: EXECUTE_TOOL"
-
-        # Case 3: Grounded Context Synthesis
-        if "=== RETRIEVED CONTEXT EVIDENCE ===" in prompt:
-            parts = prompt.split("=== RETRIEVED CONTEXT EVIDENCE ===")
-            user_question = parts[0].replace("User Question:", "").strip()
-            context = parts[1].split("=== END CONTEXT ===")[0].strip() if len(parts) > 1 else ""
-
-            return (
-                f"Based on our knowledge base and retrieved evidence for '{user_question}':\n\n"
-                f"{context}\n\n"
-                f"All retrieved points are grounded in our verified repository data."
+        # Dispatch call
+        if custom_endpoint and custom_endpoint.strip():
+            return self._call_custom_endpoint(
+                endpoint=custom_endpoint.strip(),
+                model=model,
+                prompt=prompt,
+                system_instruction=system_instruction,
+                temperature=temperature,
+                max_tokens=max_tok,
+                conversation_id=conversation_id,
+                start_time=start_time,
+                invoker=invoker,
+            )
+        else:
+            return self._call_google_genai(
+                model=model,
+                prompt=prompt,
+                system_instruction=system_instruction,
+                temperature=temperature,
+                max_tokens=max_tok,
+                conversation_id=conversation_id,
+                start_time=start_time,
+                invoker=invoker,
             )
 
-        # Default Assistant Response
-        clean_prompt = prompt.replace("User Question:", "").strip()
-        return f"Regarding your inquiry about '{clean_prompt}': The system is fully online and ready with RAG and skill capabilities."
+    def _call_google_genai(
+        self,
+        model: str,
+        prompt: str,
+        system_instruction: Optional[str],
+        temperature: float,
+        max_tokens: int,
+        conversation_id: str,
+        start_time: float,
+        invoker: str,
+    ) -> Dict[str, Any]:
+        if not self.client:
+            raise RuntimeError("Google GenAI client is not initialized. Check GEMINI_API_KEY.")
 
-# Global singleton
-llm_service = LLMService()
+        try:
+            # Build configuration
+            gen_config = types.GenerateContentConfig(
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+                system_instruction=system_instruction if system_instruction else None,
+            )
+
+            response = self.client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=gen_config,
+            )
+            elapsed_ms = (time.time() - start_time) * 1000
+
+            resp_text = response.text or ""
+            
+            # Extract usage metadata
+            usage = getattr(response, "usage_metadata", None)
+            input_tokens = getattr(usage, "prompt_token_count", len(prompt.split()) * 2) or 0
+            output_tokens = getattr(usage, "candidates_token_count", len(resp_text.split()) * 2) or 0
+
+            resp_payload = {
+                "response_text": resp_text,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "finish_reason": str(getattr(response.candidates[0], "finish_reason", "STOP")) if response.candidates else "STOP",
+                "raw_response": str(response),
+            }
+
+            # Log LLM Response with FULL payload
+            self.logger.log_event(
+                conversation_id=conversation_id,
+                event_type="LLM",
+                invoker=f"Model: {model}",
+                target=invoker,
+                short_description=f"Response received from {model} ({output_tokens} tokens)",
+                payload=resp_payload,
+                elapsed_ms=elapsed_ms,
+            )
+
+            # Record Telemetry
+            self.telemetry.record_invocation(
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                elapsed_ms=elapsed_ms,
+                is_error=False,
+            )
+
+            return {
+                "text": resp_text,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "elapsed_ms": elapsed_ms,
+                "model": model,
+                "status": "success",
+            }
+
+        except Exception as e:
+            elapsed_ms = (time.time() - start_time) * 1000
+            err_payload = {"error": str(e), "model": model}
+            self.logger.log_event(
+                conversation_id=conversation_id,
+                event_type="LLM",
+                invoker=f"Model: {model}",
+                target=invoker,
+                short_description=f"Model call failed: {str(e)}",
+                payload=err_payload,
+                elapsed_ms=elapsed_ms,
+                is_error=True,
+            )
+
+            self.telemetry.record_invocation(
+                model=model,
+                input_tokens=len(prompt.split()),
+                output_tokens=0,
+                elapsed_ms=elapsed_ms,
+                is_error=True,
+            )
+            raise
+
+    def _call_custom_endpoint(
+        self,
+        endpoint: str,
+        model: str,
+        prompt: str,
+        system_instruction: Optional[str],
+        temperature: float,
+        max_tokens: int,
+        conversation_id: str,
+        start_time: float,
+        invoker: str,
+    ) -> Dict[str, Any]:
+        messages = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        try:
+            resp = requests.post(endpoint, json=payload, timeout=60)
+            elapsed_ms = (time.time() - start_time) * 1000
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                choice = data.get("choices", [{}])[0]
+                resp_text = choice.get("message", {}).get("content", "")
+                usage = data.get("usage", {})
+                in_tok = usage.get("prompt_tokens", len(prompt.split()))
+                out_tok = usage.get("completion_tokens", len(resp_text.split()))
+
+                resp_payload = {
+                    "response_text": resp_text,
+                    "input_tokens": in_tok,
+                    "output_tokens": out_tok,
+                    "raw_json": data,
+                }
+
+                self.logger.log_event(
+                    conversation_id=conversation_id,
+                    event_type="LLM",
+                    invoker=f"Custom Endpoint ({endpoint})",
+                    target=invoker,
+                    short_description=f"Response from custom endpoint ({out_tok} tokens)",
+                    payload=resp_payload,
+                    elapsed_ms=elapsed_ms,
+                )
+
+                self.telemetry.record_invocation(
+                    model="custom_model",
+                    input_tokens=in_tok,
+                    output_tokens=out_tok,
+                    elapsed_ms=elapsed_ms,
+                    is_error=False,
+                )
+
+                return {
+                    "text": resp_text,
+                    "input_tokens": in_tok,
+                    "output_tokens": out_tok,
+                    "elapsed_ms": elapsed_ms,
+                    "model": "custom_model",
+                    "status": "success",
+                }
+            else:
+                elapsed_ms = (time.time() - start_time) * 1000
+                self.logger.log_event(
+                    conversation_id=conversation_id,
+                    event_type="LLM",
+                    invoker=f"Custom Endpoint ({endpoint})",
+                    target=invoker,
+                    short_description=f"Custom endpoint failed with HTTP {resp.status_code}",
+                    payload={"status_code": resp.status_code, "body": resp.text},
+                    elapsed_ms=elapsed_ms,
+                    is_error=True,
+                )
+                self.telemetry.record_invocation(
+                    model="custom_model",
+                    input_tokens=len(prompt.split()),
+                    output_tokens=0,
+                    elapsed_ms=elapsed_ms,
+                    is_error=True,
+                )
+                raise RuntimeError(f"Custom endpoint returned HTTP {resp.status_code}: {resp.text}")
+
+        except Exception as e:
+            elapsed_ms = (time.time() - start_time) * 1000
+            self.logger.log_event(
+                conversation_id=conversation_id,
+                event_type="LLM",
+                invoker=f"Custom Endpoint ({endpoint})",
+                target=invoker,
+                short_description=f"Custom endpoint request failed: {str(e)}",
+                payload={"error": str(e)},
+                elapsed_ms=elapsed_ms,
+                is_error=True,
+            )
+            self.telemetry.record_invocation(
+                model="custom_model",
+                input_tokens=len(prompt.split()),
+                output_tokens=0,
+                elapsed_ms=elapsed_ms,
+                is_error=True,
+            )
+            raise
+
+# Singleton instance
+_LLM_SERVICE: Optional[LLMService] = None
+
+def get_llm_service() -> LLMService:
+    global _LLM_SERVICE
+    if _LLM_SERVICE is None:
+        _LLM_SERVICE = LLMService()
+    return _LLM_SERVICE

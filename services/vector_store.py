@@ -1,394 +1,400 @@
-"""
-Vector Store Engine.
-Supports JSON-backed persistence, cosine similarity search, chunk deduplication,
-URL web scraping & local directory recursive ingestion with customizable chunking parameters.
-"""
+"""Dual ChromaDB Vector Store managing skills and documents collections."""
 import hashlib
-import json
 import os
-import re
-import threading
-import urllib.request
+import shutil
+import time
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
-import numpy as np
-
-from config import (
-    DOC_VECTOR_DB_FILE,
-    SKILL_VECTOR_DB_FILE,
-    DATABASE_DIR,
-    DEFAULT_CHUNK_SIZE,
-    DEFAULT_CHUNK_OVERLAP,
-    MIN_RAG_DOC_SCORE,
-    MIN_SKILL_SCORE
-)
-from services.ollama_service import ollama_service
-from services.log_service import audit_logger
-
-def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
-    """Calculate cosine similarity between two vectors."""
-    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
-        return 0.0
-    a = np.array(vec_a, dtype=np.float32)
-    b = np.array(vec_b, dtype=np.float32)
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return float(np.dot(a, b) / (norm_a * norm_b))
-
-def chunk_text(text: str, chunk_size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_CHUNK_OVERLAP) -> List[str]:
-    """
-    Split text into chunks of specified character length with overlap.
-    """
-    if not text:
-        return []
-    chunks = []
-    start = 0
-    text_len = len(text)
-    step = max(1, chunk_size - overlap)
-
-    while start < text_len:
-        end = min(start + chunk_size, text_len)
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        if end >= text_len:
-            break
-        start += step
-
-    return chunks
+from typing import Dict, Any, List, Optional
+import chromadb
+from chromadb.config import Settings
+import config
+from services.ollama_service import get_ollama_service
+from services.log_service import get_log_service
 
 class VectorStore:
-    def __init__(self, db_path: Path):
-        self.db_path = Path(db_path)
-        self.lock = threading.RLock()
-        self.is_ingesting = False
-        self._ensure_db_file()
+    def __init__(self, persist_dir: Optional[Path] = None):
+        self.persist_dir = persist_dir or config.CHROMA_DB_DIR
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
+        self.client = chromadb.PersistentClient(path=str(self.persist_dir))
+        self.ollama = get_ollama_service()
+        self.logger = get_log_service()
 
-    def _ensure_db_file(self):
-        with self.lock:
-            if not self.db_path.exists() or self.db_path.stat().st_size == 0:
-                self.db_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(self.db_path, "w", encoding="utf-8") as f:
-                    json.dump({"embedding_model": ollama_service.current_model, "documents": {}, "chunks": []}, f, indent=2)
-
-    def _load(self) -> Dict[str, Any]:
-        with self.lock:
-            try:
-                if self.db_path.exists() and self.db_path.stat().st_size > 0:
-                    with open(self.db_path, "r", encoding="utf-8") as f:
-                        return json.load(f)
-            except Exception as e:
-                print(f"[VectorStore Load Error] {e}")
-            return {"embedding_model": ollama_service.current_model, "documents": {}, "chunks": []}
-
-    def _save(self, data: Dict[str, Any]):
-        with self.lock:
-            if "embedding_model" not in data:
-                data["embedding_model"] = ollama_service.current_model
-            with open(self.db_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-
-    def reset(self, embedding_model: Optional[str] = None):
-        """Clear all indexed records and record active embedding model."""
-        model = embedding_model or ollama_service.current_model
-        with self.lock:
-            with open(self.db_path, "w", encoding="utf-8") as f:
-                json.dump({"embedding_model": model, "documents": {}, "chunks": []}, f, indent=2)
-
-    def delete_document(self, doc_name: str) -> Dict[str, Any]:
-        """
-        Delete any document from the DB and all its associated chunks.
-        Per SPECIFICATION.md: 'Allow the user to delete any document from the DB by using the Delete button on the right side of the document row'
-        """
-        with self.lock:
-            data = self._load()
-            docs = data.get("documents", {})
-            chunks = data.get("chunks", [])
-
-            if doc_name not in docs and not any(c.get("metadata", {}).get("document_name") == doc_name for c in chunks):
-                return {
-                    "status": "error",
-                    "message": f"Document '{doc_name}' not found in database."
-                }
-
-            # Remove doc from documents dict
-            docs.pop(doc_name, None)
-
-            # Filter out chunks
-            original_count = len(chunks)
-            remaining_chunks = [c for c in chunks if c.get("metadata", {}).get("document_name") != doc_name]
-            deleted_chunks_count = original_count - len(remaining_chunks)
-
-            data["documents"] = docs
-            data["chunks"] = remaining_chunks
-
-            with open(self.db_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-
-        audit_logger.log_event(
-            event_type="Document Deleted",
-            invoker="User",
-            target="VectorStore",
-            payload={"document_name": doc_name},
-            response={"deleted_chunks": deleted_chunks_count, "remaining_chunks": len(remaining_chunks)},
-            description=f"Deleted document '{doc_name}' ({deleted_chunks_count} chunks removed)"
+        # Initialize collections
+        self.skills_col = self.client.get_or_create_collection(
+            name="skills_store",
+            metadata={"hnsw:space": "cosine"}
+        )
+        self.docs_col = self.client.get_or_create_collection(
+            name="documents_store",
+            metadata={"hnsw:space": "cosine"}
         )
 
-        return {
-            "status": "success",
-            "message": f"Document '{doc_name}' successfully deleted.",
-            "deleted_document": doc_name,
-            "deleted_chunks": deleted_chunks_count,
-            "remaining_chunks": len(remaining_chunks)
-        }
+    # -------------------------------------------------------------------------
+    # Skills Vector Store Operations
+    # -------------------------------------------------------------------------
+    def add_skill(
+        self,
+        skill_name: str,
+        description: str,
+        full_content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        conversation_id: str = "system"
+    ):
+        """Index a skill record using embedding of 'name + description' and full SKILL.md."""
+        embed_input = f"{skill_name}: {description}"
+        vector = self.ollama.get_embedding(embed_input, conversation_id=conversation_id)
+        
+        meta = metadata or {}
+        meta.update({
+            "name": skill_name,
+            "description": description[:500],
+        })
 
-    def get_stats(self) -> Dict[str, Any]:
-        data = self._load()
-        chunks = data.get("chunks", [])
-        docs = data.get("documents", {})
+        # Sanitize metadata values to primitive types for Chroma
+        clean_meta = {k: str(v) if not isinstance(v, (str, int, float, bool)) else v for k, v in meta.items()}
 
-        file_size_mb = 0.0
-        if self.db_path.exists():
-            file_size_mb = round(self.db_path.stat().st_size / (1024 * 1024), 3)
+        self.skills_col.upsert(
+            ids=[skill_name],
+            embeddings=[vector],
+            documents=[full_content],
+            metadatas=[clean_meta]
+        )
 
-        doc_summaries = []
-        for doc_name, meta in docs.items():
-            doc_summaries.append({
-                "name": doc_name,
-                "chunks_count": meta.get("chunks_count", 0),
-                "total_characters": meta.get("total_characters", 0),
-                "source": meta.get("source", "file")
-            })
+    def skill_exists(self, skill_name: str) -> bool:
+        """Check if skill is already in the database."""
+        res = self.skills_col.get(ids=[skill_name])
+        return bool(res and res.get("ids"))
 
-        return {
-            "embedding_model": data.get("embedding_model", ollama_service.current_model),
-            "total_chunks": len(chunks),
-            "total_documents": len(docs),
-            "db_size_mb": file_size_mb,
-            "is_ingesting": self.is_ingesting,
-            "documents": doc_summaries
-        }
+    def query_skills(
+        self,
+        query: str,
+        threshold: float = config.DEFAULT_SKILL_THRESHOLD,
+        top_k: int = 5,
+        conversation_id: str = "system"
+    ) -> List[Dict[str, Any]]:
+        """Query skills store and filter by cosine similarity threshold."""
+        start_time = time.time()
+        vectorizer_name = self.ollama.active_model
+        
+        # Log skill search request
+        self.logger.log_event(
+            conversation_id=conversation_id,
+            event_type="skill search",
+            invoker="Agent Orchestrator",
+            target="Skills Vector Store",
+            short_description=f"Skill search query: '{query}' (threshold={threshold})",
+            payload={"query": query, "threshold": threshold, "vectorizer": vectorizer_name},
+        )
 
-    def add_chunk(self, chunk_text_content: str, metadata: Dict[str, Any]) -> bool:
-        """
-        Add a single chunk to the store if not duplicated (checked by SHA-256 hash).
-        """
-        content_hash = hashlib.sha256(chunk_text_content.strip().encode("utf-8")).hexdigest()
-        data = self._load()
+        try:
+            query_vector = self.ollama.get_embedding(query, conversation_id=conversation_id)
+            results = self.skills_col.query(
+                query_embeddings=[query_vector],
+                n_results=top_k,
+                include=["documents", "metadatas", "distances"]
+            )
+            elapsed_ms = (time.time() - start_time) * 1000
 
-        # Check deduplication
-        existing_hashes = {c.get("content_hash") for c in data.get("chunks", [])}
-        if content_hash in existing_hashes:
-            return False
+            matched_skills = []
+            if results and results.get("ids") and results["ids"][0]:
+                for i in range(len(results["ids"][0])):
+                    skill_id = results["ids"][0][i]
+                    doc = results["documents"][0][i] if results["documents"] else ""
+                    meta = results["metadatas"][0][i] if results["metadatas"] else {}
+                    distance = results["distances"][0][i] if results["distances"] else 1.0
+                    
+                    # Cosine similarity score = 1.0 - cosine_distance
+                    similarity = round(max(0.0, min(1.0, 1.0 - distance)), 4)
+                    
+                    if similarity >= threshold:
+                        matched_skills.append({
+                            "skill_name": skill_id,
+                            "similarity": similarity,
+                            "content": doc,
+                            "metadata": meta,
+                            "description": meta.get("description", ""),
+                        })
 
-        # Generate embedding
-        vector = ollama_service.generate_embedding(chunk_text_content)
+            # Sort by similarity descending
+            matched_skills.sort(key=lambda x: x["similarity"], reverse=True)
 
-        new_chunk = {
-            "id": f"chunk-{len(data.get('chunks', [])) + 1}",
-            "content_hash": content_hash,
-            "text": chunk_text_content,
-            "vector": vector,
-            "metadata": metadata
-        }
+            # Log skill search response
+            self.logger.log_event(
+                conversation_id=conversation_id,
+                event_type="skill search",
+                invoker="Skills Vector Store",
+                target="Agent Orchestrator",
+                short_description=f"Found {len(matched_skills)} skill(s) above threshold {threshold}",
+                payload={
+                    "vectorizer": vectorizer_name,
+                    "matched_count": len(matched_skills),
+                    "skills": [
+                        {"name": s["skill_name"], "similarity": s["similarity"]}
+                        for s in matched_skills
+                    ],
+                },
+                elapsed_ms=elapsed_ms,
+            )
 
-        data["chunks"].append(new_chunk)
-        doc_name = metadata.get("document_name", "unknown")
-        if doc_name not in data["documents"]:
-            data["documents"][doc_name] = {
-                "chunks_count": 0,
-                "total_characters": 0,
-                "source": metadata.get("source", "unknown")
-            }
+            return matched_skills
 
-        data["documents"][doc_name]["chunks_count"] += 1
-        data["documents"][doc_name]["total_characters"] += len(chunk_text_content)
+        except Exception as e:
+            elapsed_ms = (time.time() - start_time) * 1000
+            self.logger.log_event(
+                conversation_id=conversation_id,
+                event_type="skill search",
+                invoker="Skills Vector Store",
+                target="Agent Orchestrator",
+                short_description=f"Skill search failed: {str(e)}",
+                payload={"error": str(e), "vectorizer": vectorizer_name},
+                elapsed_ms=elapsed_ms,
+                is_error=True,
+            )
+            return []
 
-        self._save(data)
-        return True
+    # -------------------------------------------------------------------------
+    # Document Vector Store Operations
+    # -------------------------------------------------------------------------
+    def chunk_text(self, text: str, chunk_size: int = 1000, chunk_overlap: int = 200) -> List[str]:
+        """Partition text into chunks with defined character size and overlap."""
+        if not text:
+            return []
+        chunks = []
+        start = 0
+        text_len = len(text)
+        
+        while start < text_len:
+            end = min(start + chunk_size, text_len)
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            if end >= text_len:
+                break
+            start += max(1, chunk_size - chunk_overlap)
+            
+        return chunks
 
-    def ingest_text_document(
+    def add_document(
         self,
         doc_name: str,
-        text_content: str,
-        source: str = "text",
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        overlap: int = DEFAULT_CHUNK_OVERLAP
-    ) -> Tuple[int, int]:
-        """
-        Chunk and index text content. Returns (added_chunks, total_chars).
-        Ensures no duplicate chunks are added.
-        """
-        chunks = chunk_text(text_content, chunk_size=chunk_size, overlap=overlap)
-        added_count = 0
-        total_chars = len(text_content)
-
-        for idx, chk in enumerate(chunks):
-            meta = {
-                "document_name": doc_name,
-                "source": source,
-                "chunk_index": idx,
-                "total_chunks": len(chunks)
-            }
-            if self.add_chunk(chk, meta):
-                added_count += 1
-
-        return added_count, total_chars
-
-    def ingest_url(
-        self,
-        url: str,
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        overlap: int = DEFAULT_CHUNK_OVERLAP
+        content: str,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+        conversation_id: str = "system"
     ) -> Dict[str, Any]:
-        """
-        Fetch HTML from URL, strip tags, and ingest chunks.
-        """
-        self.is_ingesting = True
-        try:
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AgentWithRAG/1.0"}
-            )
-            with urllib.request.urlopen(req, timeout=10) as response:
-                html = response.read().decode("utf-8", errors="ignore")
+        """Chunk and ingest a document with strict chunk deduplication."""
+        raw_chunks = self.chunk_text(content, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        
+        # Deduplication check: compute content hash for each chunk
+        seen_hashes = set()
+        unique_chunks = []
+        for ch in raw_chunks:
+            ch_hash = hashlib.sha256(ch.encode("utf-8")).hexdigest()
+            if ch_hash not in seen_hashes:
+                seen_hashes.add(ch_hash)
+                unique_chunks.append((ch_hash, ch))
 
-            # Basic HTML text extraction
-            text = re.sub(r'<script.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
-            text = re.sub(r'<style.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
-            text = re.sub(r'<[^>]+>', ' ', text)
-            clean_text = ' '.join(text.split())
+        added_chunks = 0
+        total_chars = len(content)
 
-            doc_name = url.split("//")[-1].replace("/", "_")[:60]
-            added_chunks, total_chars = self.ingest_text_document(
-                doc_name=doc_name,
-                text_content=clean_text,
-                source=url,
-                chunk_size=chunk_size,
-                overlap=overlap
-            )
-
-            audit_logger.log_event(
-                event_type="URL Ingestion",
-                invoker="User",
-                target="VectorStore",
-                payload={"url": url, "chunk_size": chunk_size, "overlap": overlap},
-                response={"doc_name": doc_name, "added_chunks": added_chunks, "characters": total_chars},
-                description=f"Ingested URL: {url}"
-            )
-
-            return {
-                "status": "success",
-                "document_name": doc_name,
-                "added_chunks": added_chunks,
-                "total_characters": total_chars
-            }
-        except Exception as e:
-            audit_logger.log_event(
-                event_type="Ingestion Error",
-                invoker="User",
-                target="VectorStore",
-                payload={"url": url},
-                response={"error": str(e)},
-                description=f"Failed to ingest URL {url}: {e}",
-                status="error"
-            )
-            return {"status": "error", "message": str(e)}
-        finally:
-            self.is_ingesting = False
-
-    def ingest_local_path(
-        self,
-        path_str: str,
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        overlap: int = DEFAULT_CHUNK_OVERLAP
-    ) -> Dict[str, Any]:
-        """
-        Recursively ingest files from a local directory or file.
-        """
-        self.is_ingesting = True
-        try:
-            target_path = Path(path_str).resolve()
-            if not target_path.exists():
-                return {"status": "error", "message": f"Path '{path_str}' does not exist."}
-
-            files_to_read = []
-            if target_path.is_file():
-                files_to_read.append(target_path)
-            else:
-                for ext in ["*.txt", "*.md", "*.csv", "*.json", "*.py", "*.html"]:
-                    files_to_read.extend(list(target_path.rglob(ext)))
-
-            total_added = 0
-            total_chars = 0
-            processed_docs = []
-
-            for file_path in files_to_read:
-                try:
-                    content = file_path.read_text(encoding="utf-8", errors="ignore")
-                    if not content.strip():
-                        continue
-                    doc_name = file_path.name
-                    added, chars = self.ingest_text_document(
-                        doc_name=doc_name,
-                        text_content=content,
-                        source=str(file_path),
-                        chunk_size=chunk_size,
-                        overlap=overlap
-                    )
-                    total_added += added
-                    total_chars += chars
-                    processed_docs.append(doc_name)
-                except Exception as fe:
-                    print(f"Failed to read file {file_path}: {fe}")
-
-            audit_logger.log_event(
-                event_type="Local Path Ingestion",
-                invoker="User",
-                target="VectorStore",
-                payload={"path": path_str, "files_found": len(files_to_read)},
-                response={"added_chunks": total_added, "total_characters": total_chars, "docs": processed_docs},
-                description=f"Ingested {len(processed_docs)} local documents"
-            )
-
-            return {
-                "status": "success",
-                "documents_processed": processed_docs,
-                "added_chunks": total_added,
-                "total_characters": total_chars
-            }
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-        finally:
-            self.is_ingesting = False
-
-    def query_similar(self, query_text: str, top_k: int = 5, min_score: float = MIN_RAG_DOC_SCORE, conversation_id: Optional[str] = None, invoker: str = "vector database") -> List[Dict[str, Any]]:
-        """
-        Retrieve chunks exceeding min_score, sorted by cosine similarity descending.
-        """
-        query_vec = ollama_service.generate_embedding(query_text, conversation_id=conversation_id, invoker=invoker)
-        data = self._load()
-        chunks = data.get("chunks", [])
-
-        scored_chunks = []
-        for c in chunks:
-            c_vec = c.get("vector")
-            if not c_vec:
+        for idx, (ch_hash, ch_text) in enumerate(unique_chunks):
+            chunk_id = f"{doc_name}#chunk_{idx}_{ch_hash[:8]}"
+            # Verify if identical chunk already exists in collection
+            existing = self.docs_col.get(ids=[chunk_id])
+            if existing and existing.get("ids"):
                 continue
-            score = cosine_similarity(query_vec, c_vec)
-            if score >= min_score:
-                scored_chunks.append({
-                    "id": c.get("id"),
-                    "score": round(score, 4),
-                    "text": c.get("text"),
-                    "metadata": c.get("metadata", {})
-                })
 
-        scored_chunks.sort(key=lambda x: x["score"], reverse=True)
-        return scored_chunks[:top_k]
+            vector = self.ollama.get_embedding(ch_text, conversation_id=conversation_id)
+            self.docs_col.upsert(
+                ids=[chunk_id],
+                embeddings=[vector],
+                documents=[ch_text],
+                metadatas=[{
+                    "doc_name": doc_name,
+                    "chunk_index": idx,
+                    "char_count": len(ch_text),
+                    "hash": ch_hash,
+                }]
+            )
+            added_chunks += 1
 
-# Global singletons for Documents and Skills
-doc_vector_store = VectorStore(DOC_VECTOR_DB_FILE)
-skill_vector_store = VectorStore(SKILL_VECTOR_DB_FILE)
+        return {
+            "doc_name": doc_name,
+            "chunks_created": len(unique_chunks),
+            "chunks_added": added_chunks,
+            "total_chars": total_chars,
+        }
+
+    def delete_document(self, doc_name: str) -> int:
+        """Delete all chunks belonging to a document."""
+        # Find all chunk IDs with matching metadata doc_name
+        res = self.docs_col.get(where={"doc_name": doc_name})
+        ids_to_delete = res.get("ids", [])
+        if ids_to_delete:
+            self.docs_col.delete(ids=ids_to_delete)
+        return len(ids_to_delete)
+
+    def query_documents(
+        self,
+        query: str,
+        top_k: int = config.DEFAULT_RAG_CHUNKS,
+        threshold: float = config.DEFAULT_DOC_THRESHOLD,
+        conversation_id: str = "system"
+    ) -> List[Dict[str, Any]]:
+        """Query documents store and return results grouped by document."""
+        start_time = time.time()
+        
+        # Log document search request
+        self.logger.log_event(
+            conversation_id=conversation_id,
+            event_type="document search",
+            invoker="Agent",
+            target="Documents Vector Store",
+            short_description=f"Document search: '{query}' (threshold={threshold})",
+            payload={"query": query, "top_k": top_k, "threshold": threshold},
+        )
+
+        try:
+            query_vector = self.ollama.get_embedding(query, conversation_id=conversation_id)
+            results = self.docs_col.query(
+                query_embeddings=[query_vector],
+                n_results=top_k,
+                include=["documents", "metadatas", "distances"]
+            )
+            elapsed_ms = (time.time() - start_time) * 1000
+
+            doc_groups: Dict[str, Dict[str, Any]] = {}
+            if results and results.get("ids") and results["ids"][0]:
+                for i in range(len(results["ids"][0])):
+                    doc_text = results["documents"][0][i] if results["documents"] else ""
+                    meta = results["metadatas"][0][i] if results["metadatas"] else {}
+                    distance = results["distances"][0][i] if results["distances"] else 1.0
+                    similarity = round(max(0.0, min(1.0, 1.0 - distance)), 4)
+                    
+                    if similarity >= threshold:
+                        doc_name = meta.get("doc_name", "Unknown Document")
+                        if doc_name not in doc_groups:
+                            doc_groups[doc_name] = {
+                                "doc_name": doc_name,
+                                "highest_similarity": similarity,
+                                "chunks": [],
+                            }
+                        
+                        doc_groups[doc_name]["chunks"].append({
+                            "chunk_id": results["ids"][0][i],
+                            "similarity": similarity,
+                            "text": doc_text,
+                            "index": meta.get("chunk_index", 0),
+                        })
+                        if similarity > doc_groups[doc_name]["highest_similarity"]:
+                            doc_groups[doc_name]["highest_similarity"] = similarity
+
+            # Format sorted list of documents
+            grouped_results = list(doc_groups.values())
+            grouped_results.sort(key=lambda x: x["highest_similarity"], reverse=True)
+
+            # Log document search response
+            self.logger.log_event(
+                conversation_id=conversation_id,
+                event_type="document search",
+                invoker="Documents Vector Store",
+                target="Agent",
+                short_description=f"Retrieved context from {len(grouped_results)} document(s)",
+                payload={
+                    "total_documents": len(grouped_results),
+                    "documents": [
+                        {"doc_name": d["doc_name"], "chunks_count": len(d["chunks"]), "top_score": d["highest_similarity"]}
+                        for d in grouped_results
+                    ]
+                },
+                elapsed_ms=elapsed_ms,
+            )
+
+            return grouped_results
+
+        except Exception as e:
+            elapsed_ms = (time.time() - start_time) * 1000
+            self.logger.log_event(
+                conversation_id=conversation_id,
+                event_type="document search",
+                invoker="Documents Vector Store",
+                target="Agent",
+                short_description=f"Document search failed: {str(e)}",
+                payload={"error": str(e)},
+                elapsed_ms=elapsed_ms,
+                is_error=True,
+            )
+            return []
+
+    def get_ingested_documents(self) -> List[Dict[str, Any]]:
+        """List all ingested documents with chunk count and total character count."""
+        res = self.docs_col.get(include=["metadatas"])
+        docs_summary: Dict[str, Dict[str, Any]] = {}
+        
+        if res and res.get("metadatas"):
+            for meta in res["metadatas"]:
+                doc_name = meta.get("doc_name", "Unknown Document")
+                chars = int(meta.get("char_count", 0))
+                if doc_name not in docs_summary:
+                    docs_summary[doc_name] = {
+                        "doc_name": doc_name,
+                        "chunk_count": 0,
+                        "total_chars": 0,
+                    }
+                docs_summary[doc_name]["chunk_count"] += 1
+                docs_summary[doc_name]["total_chars"] += chars
+
+        return sorted(docs_summary.values(), key=lambda x: x["doc_name"])
+
+    def get_database_statistics(self) -> Dict[str, Any]:
+        """Calculate statistics: chunk count, document count, and database disk size in MB."""
+        ingested = self.get_ingested_documents()
+        total_chunks = sum(d["chunk_count"] for d in ingested)
+        total_docs = len(ingested)
+
+        # Calculate directory size in MB
+        total_bytes = 0
+        if self.persist_dir.exists():
+            for root, _, files in os.walk(self.persist_dir):
+                for f in files:
+                    fp = Path(root) / f
+                    total_bytes += fp.stat().st_size
+
+        size_mb = round(total_bytes / (1024 * 1024), 2)
+        return {
+            "total_chunks": total_chunks,
+            "total_documents": total_docs,
+            "db_size_mb": size_mb,
+            "skills_count": self.skills_col.count(),
+        }
+
+    def reset_database(self):
+        """Clear all records from documents vector database."""
+        try:
+            self.client.delete_collection("documents_store")
+        except Exception:
+            pass
+        self.docs_col = self.client.get_or_create_collection(
+            name="documents_store",
+            metadata={"hnsw:space": "cosine"}
+        )
+
+    def reset_skills_database(self):
+        """Clear all records from skills vector database."""
+        try:
+            self.client.delete_collection("skills_store")
+        except Exception:
+            pass
+        self.skills_col = self.client.get_or_create_collection(
+            name="skills_store",
+            metadata={"hnsw:space": "cosine"}
+        )
+
+# Singleton instance
+_VECTOR_STORE: Optional[VectorStore] = None
+
+def get_vector_store() -> VectorStore:
+    global _VECTOR_STORE
+    if _VECTOR_STORE is None:
+        _VECTOR_STORE = VectorStore()
+    return _VECTOR_STORE

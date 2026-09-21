@@ -1,1 +1,1 @@
-"""Services package for Agent with RAG application."""
+"""Services package for Agent-with-RAG."""
